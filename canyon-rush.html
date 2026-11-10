@@ -1,0 +1,930 @@
+<!doctype html>
+<html lang="ko">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width,initial-scale=1,user-scalable=no">
+<title>Canyon Rush</title>
+<link href="https://fonts.googleapis.com/css2?family=Orbitron:wght@600;900&display=swap" rel="stylesheet">
+<style>
+  html,body{margin:0;height:100%;background:#2a1430;overflow:hidden;touch-action:none;user-select:none;-webkit-user-select:none}
+  canvas{display:block;width:100vw;height:100vh;cursor:none}
+  #menuBtn{position:fixed;left:16px;top:16px;padding:8px 14px;border-radius:10px;background:rgba(30,8,20,.6);color:#ffd06a;font:900 12px Orbitron,sans-serif;text-decoration:none;border:1px solid rgba(255,208,106,.5);letter-spacing:1px;cursor:pointer}
+</style>
+</head>
+<body>
+<canvas id="c"></canvas>
+<a id="menuBtn" href="index.html">◀ MENU</a>
+<script>
+'use strict';
+// ================= 유틸 =================
+const cv = document.getElementById('c'), ctx = cv.getContext('2d');
+let W = 0, H = 0, DPR = 1, F = 600;
+const rand = (a, b) => a + Math.random() * (b - a);
+const clamp = (v, a, b) => v < a ? a : v > b ? b : v;
+const lerp = (a, b, k) => a + (b - a) * k;
+const TAU = Math.PI * 2;
+const pick = a => a[Math.floor(Math.random() * a.length)];
+const easeOutCubic = x => 1 - Math.pow(1 - x, 3);
+const easeInCubic = x => x * x * x;
+const easeOutBack = x => { const c1 = 1.70158, c3 = c1 + 1; return 1 + c3 * Math.pow(x - 1, 3) + c1 * Math.pow(x - 1, 2); };
+const FONT = "Orbitron, 'Arial Black', sans-serif";
+const KFONT = "'Apple SD Gothic Neo', 'Malgun Gothic', sans-serif";
+const hex2 = h => { const n = parseInt(h.slice(1), 16); return [n >> 16 & 255, n >> 8 & 255, n & 255]; };
+const mixA = (a, b, k) => [lerp(a[0], b[0], k), lerp(a[1], b[1], k), lerp(a[2], b[2], k)];
+const rgb = c => `rgb(${c[0] | 0},${c[1] | 0},${c[2] | 0})`;
+function hexA(h, a) { const n = parseInt(h.slice(1), 16); return `rgba(${n >> 16 & 255},${n >> 8 & 255},${n & 255},${a})`; }
+function rrect(x, y, w, h, r) { ctx.beginPath(); ctx.moveTo(x + r, y); ctx.arcTo(x + w, y, x + w, y + h, r); ctx.arcTo(x + w, y + h, x, y + h, r); ctx.arcTo(x, y + h, x, y, r); ctx.arcTo(x, y, x + w, y, r); ctx.closePath(); }
+function resize() { DPR = Math.min(2, window.devicePixelRatio || 1); W = innerWidth; H = innerHeight; cv.width = Math.round(W * DPR); cv.height = Math.round(H * DPR); }
+
+// ================= 글로우 =================
+const glowCache = {};
+function glowSpr(col) {
+  let c = glowCache[col]; if (c) return c;
+  c = document.createElement('canvas'); c.width = c.height = 64;
+  const g = c.getContext('2d'), gr = g.createRadialGradient(32, 32, 0, 32, 32, 32);
+  gr.addColorStop(0, hexA(col, 1)); gr.addColorStop(.25, hexA(col, .6)); gr.addColorStop(.6, hexA(col, .15)); gr.addColorStop(1, hexA(col, 0));
+  g.fillStyle = gr; g.fillRect(0, 0, 64, 64); return glowCache[col] = c;
+}
+function glow(x, y, r, col, a = 1) { if (a <= 0 || r <= 0) return; ctx.globalAlpha = Math.min(1, a); ctx.drawImage(glowSpr(col), x - r, y - r, r * 2, r * 2); ctx.globalAlpha = 1; }
+
+// ================= 사운드 =================
+let AC = null, master = null, noiseBuf = null, windG = null; const lastS = {};
+function initAudio() {
+  try {
+    if (!AC) {
+      AC = new (window.AudioContext || window.webkitAudioContext)();
+      master = AC.createGain(); master.gain.value = .5; master.connect(AC.destination);
+      noiseBuf = AC.createBuffer(1, AC.sampleRate * 2, AC.sampleRate);
+      const d = noiseBuf.getChannelData(0); for (let i = 0; i < d.length; i++) d[i] = Math.random() * 2 - 1;
+      // 바람 소리 루프
+      const s = AC.createBufferSource(); s.buffer = noiseBuf; s.loop = true;
+      const bq = AC.createBiquadFilter(); bq.type = 'bandpass'; bq.frequency.value = 500; bq.Q.value = .7;
+      windG = AC.createGain(); windG.gain.value = 0; s.connect(bq); bq.connect(windG); windG.connect(master); s.start();
+    }
+    if (AC.state === 'suspended') AC.resume();
+  } catch (e) { }
+}
+function can(n, gap) { const now = performance.now(); if (lastS[n] && now - lastS[n] < gap) return false; lastS[n] = now; return true; }
+function tone(f, d, type = 'square', v = .05, slide = 1, delay = 0) {
+  if (!AC) return; const t0 = AC.currentTime + delay;
+  const o = AC.createOscillator(), g = AC.createGain(); o.type = type; o.frequency.setValueAtTime(f, t0);
+  if (slide !== 1) o.frequency.exponentialRampToValueAtTime(Math.max(20, f * slide), t0 + d);
+  g.gain.setValueAtTime(v, t0); g.gain.exponentialRampToValueAtTime(.0001, t0 + d);
+  o.connect(g); g.connect(master); o.start(t0); o.stop(t0 + d + .02);
+}
+function noise(d, v = .2, f = 1000, f2 = 100) {
+  if (!AC) return; const t0 = AC.currentTime;
+  const s = AC.createBufferSource(); s.buffer = noiseBuf;
+  const bq = AC.createBiquadFilter(); bq.type = 'lowpass'; bq.frequency.setValueAtTime(f, t0); bq.frequency.exponentialRampToValueAtTime(Math.max(30, f2), t0 + d);
+  const g = AC.createGain(); g.gain.setValueAtTime(v, t0); g.gain.exponentialRampToValueAtTime(.0001, t0 + d);
+  s.connect(bq); bq.connect(g); g.connect(master); s.start(t0); s.stop(t0 + d);
+}
+const sfx = {
+  gun() { if (can('gun', 90)) tone(900, .04, 'square', .012, .5); },
+  hit() { if (can('hit', 55)) noise(.06, .06, 4500, 1500); },
+  clank() { if (can('clank', 80)) tone(1800, .05, 'triangle', .03, .6); },
+  boom(s = 1) { if (can('boom', 45)) { noise(.35 + s * .25, Math.min(.5, .16 * s + .1), 1500, 60); tone(110, .3 + .2 * s, 'sine', .14 * Math.min(s, 2), .3); } },
+  big() { noise(1.6, .55, 1000, 40); tone(70, 1.3, 'sine', .38, .3); },
+  ring(n) { const f = 520 * Math.pow(1.06, Math.min(n, 24)); tone(f, .12, 'triangle', .07); tone(f * 1.5, .2, 'triangle', .05, 1, .06); },
+  roll() { noise(.45, .14, 400, 3500); },
+  boost() { noise(.7, .15, 300, 3000); tone(120, .6, 'sawtooth', .04, 3); },
+  scrape() { if (can('scrape', 90)) noise(.12, .12, 6000, 2500); },
+  whoosh() { noise(.6, .2, 300, 4000); },
+  hurt() { noise(.3, .3, 2500, 200); tone(220, .25, 'sawtooth', .08, .4); },
+  warn() { for (let i = 0; i < 3; i++) { tone(560, .25, 'square', .05, 1, i * .55); tone(400, .25, 'square', .05, 1, i * .55 + .27); } },
+  sector() { tone(330, .15, 'triangle', .06); tone(495, .15, 'triangle', .06, 1, .15); tone(660, .4, 'triangle', .06, 1, .3); },
+};
+
+// ================= 상수 & 트랙 =================
+const SEG = 180, NSEG = 50, FAR = SEG * NSEG, NEAR = 40, PLZ = 240, G = 200, WH = 1500, SECLEN = 10000;
+const cxAt = d => Math.sin(d * .0003) * 480 + Math.sin(d * .00085 + 1) * 190;
+const cwAt = d => 920 + Math.sin(d * .00031) * 240;
+const SECTORS = [
+  { name: '붉은 협곡', skyT: '#3a1e4a', skyB: '#ffb070', sun: '#fff0c0', f1: '#c98a52', f2: '#b47744', w1: '#b4623a', w2: '#9b502e', fog: '#f0a878', river: '#5ac8e8' },
+  { name: '빙하 협곡', skyT: '#163563', skyB: '#cfe8ff', sun: '#ffffff', f1: '#e6f2ff', f2: '#c8dcf2', w1: '#8db4dc', w2: '#769fca', fog: '#d4eaff', river: '#4fd8ff' },
+  { name: '화산 지대', skyT: '#120208', skyB: '#b03a1e', sun: '#ffa050', f1: '#40302c', f2: '#33241f', w1: '#5a322a', w2: '#47261f', fog: '#80301e', river: '#ff6a1a' },
+].map(s => { const o = { name: s.name }; for (const k in s) if (k !== 'name') o[k] = hex2(s[k]); o.riverHex = s.river; return o; });
+let pal = {};
+function updPalette() {
+  const sec = Math.floor(D / SECLEN), into = D - sec * SECLEN, a = SECTORS[sec % 3], b = SECTORS[(sec + 1) % 3];
+  const k = clamp((into - (SECLEN - 1500)) / 1500, 0, 1);
+  for (const key of ['skyT', 'skyB', 'sun', 'f1', 'f2', 'w1', 'w2', 'fog', 'river']) pal[key] = mixA(a[key], b[key], k);
+  pal.riverHex = k < .5 ? a.riverHex : b.riverHex; pal.lava = (k < .5 ? sec % 3 : (sec + 1) % 3) === 2;
+}
+
+// ================= 상태 =================
+let state = 'title', t = 0, titleT = 0, paused = false;
+let timeScale = 1, slowmo = 0, hitstop = 0, shake = 0, flash = 0, flashCol = '#fff', hurtFlash = 0;
+let D = 0, speed = 1500, camX = 0, camY = -100, camRoll = 0, fovK = 1;
+let player, objs = [], enemies = [], pbullets = [], ebullets = [], parts = [], texts = [], fx2d = [], timers = [];
+let score = 0, dispScore = 0, scorePop = 0, ringChain = 0, ringPop = 0, kills = 0, maxChain = 0, rings = 0;
+let nextD = 1500, fighterT = 4, nextBossD = 7000, boss = null, curSector = 0, banner = null;
+let overT = 0, overAnim = 0, best = 0, newRecord = false;
+try { best = +localStorage.getItem('canyon_best') || 0; } catch (e) { }
+function later(d, fn) { timers.push({ t: d, fn }); }
+function popText(x, y, txt, size = 16, col = '#fff', life = .9, vy = -60) { texts.push({ x, y, txt, size, col, life, max: life, vy }); }
+
+// ================= 입력 =================
+const keys = {};
+const mouse = { x: 0, y: 0, active: false };
+const drag = { id: null, x: 0, y: 0, sx: 0, sy: 0, px: 0, py: 0 };
+let isTouch = false, lastTap = 0;
+addEventListener('keydown', e => {
+  if (['Space', 'ArrowUp', 'ArrowDown', 'ArrowLeft', 'ArrowRight'].includes(e.code)) e.preventDefault();
+  keys[e.code] = true; if (e.repeat) return; initAudio();
+  if (['KeyA', 'KeyD', 'KeyW', 'KeyS', 'ArrowLeft', 'ArrowRight', 'ArrowUp', 'ArrowDown'].includes(e.code)) mouse.active = false;
+  if (e.code === 'KeyM' && (state !== 'play' || paused)) { location.href = 'index.html'; return; }
+  if (state === 'title' || (state === 'over' && overAnim > 1)) { if (e.code === 'Space' || e.code === 'Enter') startGame(); return; }
+  if (state === 'play') {
+    if (e.code === 'Space' || e.code === 'KeyK') doRoll();
+    if (e.code === 'KeyP' || e.code === 'Escape') paused = !paused;
+  }
+});
+addEventListener('keyup', e => { keys[e.code] = false; });
+addEventListener('blur', () => { for (const k in keys) keys[k] = false; if (state === 'play' && player.alive) paused = true; });
+cv.addEventListener('contextmenu', e => { e.preventDefault(); doRoll(); });
+cv.addEventListener('pointermove', e => {
+  if (e.pointerType === 'mouse') { mouse.x = e.clientX; mouse.y = e.clientY; if (state === 'play') mouse.active = true; }
+  if (e.pointerId === drag.id) { drag.x = e.clientX; drag.y = e.clientY; }
+});
+cv.addEventListener('pointerdown', e => {
+  initAudio(); if (e.pointerType === 'touch') isTouch = true;
+  if (state === 'title' || (state === 'over' && overAnim > 1)) { startGame(); return; }
+  if (state !== 'play') return;
+  if (paused) { paused = false; return; }
+  if (e.pointerType === 'mouse') { if (e.button === 0) doRoll(); return; }
+  const now = performance.now(); if (now - lastTap < 280) doRoll(); lastTap = now;
+  if (Math.hypot(e.clientX - (W - 64), e.clientY - (H - 74)) < 48) { touchBoost = e.pointerId; return; }
+  drag.id = e.pointerId; drag.x = drag.sx = e.clientX; drag.y = drag.sy = e.clientY; drag.px = player.tx; drag.py = player.ty;
+  try { cv.setPointerCapture(e.pointerId); } catch (_) { }
+});
+let touchBoost = null;
+const endPtr = e => { if (e.pointerId === drag.id) drag.id = null; if (e.pointerId === touchBoost) touchBoost = null; };
+cv.addEventListener('pointerup', endPtr); cv.addEventListener('pointercancel', endPtr);
+
+// ================= 투영 =================
+function proj(x, y, d) {
+  const z = d - D; if (z < NEAR) return null;
+  const s = F / z; return { x: W / 2 + (x - camX) * s, y: H * .5 + (y - camY) * s, s, z };
+}
+function fogK(z) { return Math.pow(clamp(z / FAR, 0, 1), .75); }
+
+// ================= 파티클 (3D) =================
+function P(o) { if (parts.length < 1800) parts.push(o); }
+function spark(x, y, d, vx, vy, vd, col = '#ffd27a', life = .4, size = 3) { P({ k: 's', x, y, d, px: x, py: y, pd: d, vx, vy, vd, life, max: life, size, col, drag: 2 }); }
+function fireP(x, y, d, vx, vy, vd, size, life) { P({ k: 'f', x, y, d, vx, vy, vd, life, max: life, size, drag: 2, grow: 1.4 }); }
+function smoke(x, y, d, vx, vy, size, life, col = '#4a4a50') { P({ k: 'm', x, y, d, vx, vy, vd: 0, life, max: life, size, drag: 1.5, grow: 2.2, col }); }
+function flashP(x, y, d, size, col = '#ffe6a0', life = .25) { P({ k: 'g', x, y, d, vx: 0, vy: 0, vd: 0, life, max: life, size, col, drag: 0 }); }
+function explode(x, y, d, s = 1, vd = 0) {
+  const q = Math.sqrt(s);
+  flashP(x, y, d, 160 * s);
+  for (let i = 0; i < Math.round(12 * s); i++) { const a = rand(0, TAU), sp = rand(40, 400) * q; fireP(x, y, d, Math.cos(a) * sp, Math.sin(a) * sp, vd + rand(-300, 300) * q, rand(25, 50) * q, rand(.35, .9)); }
+  for (let i = 0; i < Math.round(16 * s); i++) { const a = rand(0, TAU), sp = rand(300, 1100) * q; spark(x, y, d, Math.cos(a) * sp, Math.sin(a) * sp, vd + rand(-900, 900) * q, pick(['#ffdc8a', '#ffffff', '#ffb050']), rand(.25, .6), rand(3, 6)); }
+  for (let i = 0; i < Math.round(6 * s); i++) smoke(x + rand(-30, 30) * s, y + rand(-30, 30) * s, d + rand(-30, 30), rand(-80, 80), rand(-120, 0), rand(30, 60) * q, rand(.9, 1.8));
+  const pp = proj(x, y, d); if (pp) fx2d.push({ x: pp.x, y: pp.y, r0: 10, R: 160 * s * clamp(pp.s * 1.5, .3, 2.5), life: .45, max: .45, w: 6 * q, col: '#ffffff' });
+  const near = clamp(1.5 - (d - D) / 2500, .2, 1);
+  shake = Math.max(shake, 5 * s * near); sfx.boom(s);
+}
+function updParts(dt) {
+  for (let i = parts.length - 1; i >= 0; i--) {
+    const q = parts[i]; q.life -= dt;
+    if (q.life <= 0 || q.d - D < NEAR * .5) { parts[i] = parts[parts.length - 1]; parts.pop(); continue; }
+    q.px = q.x; q.py = q.y; q.pd = q.d;
+    const dr = Math.max(0, 1 - q.drag * dt); q.vx *= dr; q.vy *= dr; q.vd *= dr;
+    q.x += q.vx * dt; q.y += q.vy * dt; q.d += q.vd * dt;
+  }
+  for (let i = texts.length - 1; i >= 0; i--) { const x = texts[i]; x.life -= dt; x.y += x.vy * dt; x.vy *= Math.max(0, 1 - 2 * dt); if (x.life <= 0) texts.splice(i, 1); }
+  for (let i = fx2d.length - 1; i >= 0; i--) { fx2d[i].life -= dt; if (fx2d[i].life <= 0) fx2d.splice(i, 1); }
+}
+const FIRECOL = ['#a02010', '#ff5a1a', '#ffb030', '#fff2b0'];
+function drawParts(nearSide) {
+  const list = [];
+  for (const q of parts) { const z = q.d - D; if ((z < PLZ) === nearSide) list.push(q); }
+  for (const q of list) if (q.k === 'm') { const p = proj(q.x, q.y, q.d); if (!p) continue; const f = q.life / q.max; glow(p.x, p.y, q.size * (1 + (1 - f) * q.grow) * p.s * 1.4, q.col, f * .55); }
+  ctx.globalCompositeOperation = 'lighter';
+  for (const q of list) {
+    if (q.k !== 'f' && q.k !== 'g') continue; const p = proj(q.x, q.y, q.d); if (!p) continue; const f = q.life / q.max;
+    if (q.k === 'f') glow(p.x, p.y, q.size * (1 + (1 - f) * q.grow) * p.s, FIRECOL[Math.min(3, Math.floor(f * 4))], Math.min(1, f * 1.6));
+    else glow(p.x, p.y, q.size * (1.25 - f * .25) * p.s, q.col, f);
+  }
+  ctx.lineCap = 'round';
+  for (const q of list) {
+    if (q.k !== 's') continue; const a = proj(q.x, q.y, q.d), b = proj(q.x - q.vx * .03, q.y - q.vy * .03, q.d - q.vd * .03); if (!a || !b) continue;
+    ctx.globalAlpha = q.life / q.max; ctx.strokeStyle = q.col; ctx.lineWidth = Math.max(1, q.size * a.s);
+    ctx.beginPath(); ctx.moveTo(a.x, a.y); ctx.lineTo(b.x, b.y); ctx.stroke();
+  }
+  ctx.globalAlpha = 1; ctx.globalCompositeOperation = 'source-over';
+}
+
+// ================= 플레이어 =================
+function newPlayer() {
+  return { x: cxAt(PLZ), y: -60, vx: 0, vy: 0, tx: cxAt(PLZ), ty: -60, bank: 0, pitch: 0, hp: 100, maxHp: 100, hpLag: 100, boost: .6, boosting: false, roll: 0, rollDir: 1, rollCd: 0, inv: 0, fireCd: 0, alive: true, scrapeT: 0 };
+}
+const ROLL_T = .6;
+function doRoll() {
+  const p = player; if (state !== 'play' || !p.alive || p.rollCd > 0 || paused) return;
+  const ix = (keys.ArrowRight || keys.KeyD ? 1 : 0) - (keys.ArrowLeft || keys.KeyA ? 1 : 0);
+  p.rollDir = ix || (p.vx < -40 ? -1 : 1); p.roll = ROLL_T; p.rollCd = 1.1; sfx.roll();
+  p.vx += p.rollDir * 500;
+}
+function updPlayer(dt) {
+  const p = player, pd = D + PLZ, cxP = cxAt(pd), half = cwAt(pd) / 2 - 60;
+  p.inv -= dt; p.rollCd -= dt; if (p.roll > 0) p.roll = Math.max(0, p.roll - dt);
+  if (!p.alive) return;
+  const demo = state === 'title';
+  let tvx = 0, tvy = 0;
+  if (demo) { p.tx = cxP + Math.sin(t * .9) * half * .6; p.ty = -80 + Math.sin(t * 1.3) * 120; tvx = (p.tx - p.x) * 3; tvy = (p.ty - p.y) * 3; }
+  else if (mouse.active) {
+    p.tx = cxP + ((mouse.x / W) - .5) * 2 * half; p.ty = lerp(-560, G - 40, mouse.y / H);
+    tvx = clamp((p.tx - p.x) * 6, -1100, 1100); tvy = clamp((p.ty - p.y) * 6, -900, 900);
+  } else if (drag.id !== null) {
+    p.tx = drag.px + (drag.x - drag.sx) * 2.2; p.ty = drag.py + (drag.y - drag.sy) * 2.2;
+    tvx = clamp((p.tx - p.x) * 7, -1100, 1100); tvy = clamp((p.ty - p.y) * 7, -900, 900);
+  } else {
+    const ix = (keys.ArrowRight || keys.KeyD ? 1 : 0) - (keys.ArrowLeft || keys.KeyA ? 1 : 0), iy = (keys.ArrowDown || keys.KeyS ? 1 : 0) - (keys.ArrowUp || keys.KeyW ? 1 : 0);
+    tvx = ix * 950; tvy = iy * 750; p.tx = p.x; p.ty = p.y;
+  }
+  const k = Math.min(1, dt * (p.roll > 0 ? 3 : 8)); p.vx += (tvx - p.vx) * k; p.vy += (tvy - p.vy) * k;
+  p.x += p.vx * dt; p.y += p.vy * dt;
+  // 벽 충돌 (긁힘)
+  if (Math.abs(p.x - cxP) > half) {
+    const s = Math.sign(p.x - cxP); p.x = cxP + s * half; p.vx = -s * 300;
+    if (!demo) {
+      p.scrapeT -= dt;
+      if (p.inv <= 0 && p.roll <= 0) { p.hp -= 25 * dt * 4 * .25; hurtFlash = Math.max(hurtFlash, .3); }
+      shake = Math.max(shake, 8); sfx.scrape();
+      for (let i = 0; i < 4; i++) spark(p.x + s * 50, p.y + rand(-10, 10), pd, -s * rand(100, 400), rand(-300, 300), rand(-1500, -600), pick(['#ffd27a', '#ffffff']), .4, 4);
+      if (p.hp <= 0) playerDie();
+    }
+  }
+  if (p.y < -580) { p.y = -580; p.vy = 0; }
+  if (p.y > G - 34) {
+    p.y = G - 34; p.vy = Math.min(p.vy, -120);
+    if (!demo) { if (p.inv <= 0 && p.roll <= 0) p.hp -= 6 * dt * 4; shake = Math.max(shake, 6); sfx.scrape(); for (let i = 0; i < 3; i++) spark(p.x + rand(-40, 40), G, pd, rand(-200, 200), rand(-400, -100), rand(-1500, -600), '#ffd27a', .4, 4); if (p.hp <= 0) playerDie(); }
+  }
+  p.bank += (clamp(p.vx / 950, -1, 1) * .85 - p.bank) * Math.min(1, dt * 7);
+  p.pitch += (clamp(p.vy / 750, -1, 1) - p.pitch) * Math.min(1, dt * 7);
+  // 부스트
+  const wantB = !demo && (keys.ShiftLeft || keys.ShiftRight || keys.KeyL || touchBoost !== null);
+  const was = p.boosting; p.boosting = wantB && p.boost > .02;
+  if (p.boosting && !was) { sfx.boost(); flash = .15; flashCol = '#9fe8ff'; }
+  if (p.boosting) p.boost = Math.max(0, p.boost - dt * .28); else p.boost = Math.min(1, p.boost + dt * .03);
+  // 엔진 배기
+  if (Math.random() < dt * 50) for (const s of [-1, 1]) fireP(p.x + s * 9, p.y + 4, pd - 20, rand(-20, 20), rand(-20, 20), speed * .55, p.boosting ? 9 : 5, .12);
+  if (demo) return;
+  // 사격
+  p.fireCd -= dt;
+  if (p.fireCd <= 0 && p.roll <= 0) {
+    p.fireCd = .075;
+    let tgt = null, bz = 1e9;
+    for (const e of enemies) { const z = e.d - D; if (z < PLZ + 100 || z > 4200 || e.dying) continue; if (Math.abs(e.x - p.x) < e.r + 140 && Math.abs(e.y - p.y) < e.r + 140 && z < bz) { bz = z; tgt = e; } }
+    for (const o of objs) { if (!o.hp || o.dead) continue; const z = o.d - D; if (z < PLZ + 100 || z > 4200) continue; if (Math.abs(o.x - p.x) < 140 && Math.abs(o.y - p.y) < 140 && z < bz) { bz = z; tgt = o; } }
+    for (const s of [-1, 1]) {
+      const bx = p.x + s * 22, by = p.y + 4, bd = D + PLZ + 30, vd = speed + 4200;
+      let vx = 0, vy = 0;
+      if (tgt) { const tr = Math.max(.05, (tgt.d - bd) / (vd - (tgt.vd || 0))); vx = (tgt.x - bx) / tr; vy = (tgt.y - by) / tr; }
+      pbullets.push({ x: bx, y: by, d: bd, pd: bd, vx, vy, vd, life: 1.1 });
+    }
+    sfx.gun(); p.muzzle = .05;
+  }
+  p.muzzle = (p.muzzle || 0) - dt;
+  if (p.hp > p.hpLag) p.hpLag = p.hp; else p.hpLag += (p.hp - p.hpLag) * Math.min(1, dt * 2.5);
+}
+function hurt(dmg) {
+  const p = player; if (!p.alive || p.inv > 0 || p.roll > 0 || state !== 'play') return false;
+  p.hp -= dmg; p.inv = .8; shake = Math.max(shake, 16); hurtFlash = .8; hitstop = .07; sfx.hurt();
+  for (let i = 0; i < 18; i++) { const a = rand(0, TAU); spark(p.x, p.y, D + PLZ, Math.cos(a) * 500, Math.sin(a) * 500, rand(-1200, -400), pick(['#ff9a6a', '#ffffff']), .4, 4); }
+  ringChain = 0;
+  if (p.hp <= 0) playerDie();
+  return true;
+}
+function playerDie() {
+  const p = player; if (!p.alive) return; p.alive = false; p.hp = 0;
+  explode(p.x, p.y, D + PLZ, 3.2, speed * .6); for (let k = 0; k < 4; k++) later(k * .15 + .1, () => explode(p.x + rand(-80, 80), p.y + rand(-60, 60), D + PLZ + rand(0, 200), 1.6, speed * .5));
+  slowmo = 1.8; flash = .7; flashCol = '#ff6a3a'; sfx.big(); overT = 2.8;
+  if (score > best) { best = score; newRecord = true; try { localStorage.setItem('canyon_best', best); } catch (e) { } }
+}
+
+// ================= 오브젝트 / 적 =================
+function spawnAt(d) {
+  const cx = cxAt(d), half = cwAt(d) / 2 - 80, r = Math.random(), diff = 1 + D / 25000;
+  if (boss) { if (r < .6) objs.push({ type: 'ring', d, x: cx + rand(-half * .6, half * .6), y: rand(-380, 80), R: 120 }); else mineCluster(d, cx, half); return; }
+  if (r < .26) {
+    // 링 줄 (S자)
+    const n = 4, x0 = rand(-half * .5, half * .5), y0 = rand(-350, 60), dx = rand(-140, 140), dy = rand(-80, 80);
+    for (let i = 0; i < n; i++) objs.push({ type: 'ring', d: d + i * 260, x: cxAt(d + i * 260) + x0 + dx * i, y: clamp(y0 + dy * i, -450, 120), R: 120 });
+    nextD += 600;
+  } else if (r < .44) {
+    const n = D > 4000 ? 2 : 1;
+    for (let i = 0; i < n; i++) objs.push({ type: 'pillar', d: d + i * 420, x: cxAt(d + i * 420) + rand(-half * .85, half * .85), w: rand(60, 95) });
+  } else if (r < .54 && D > 2500) {
+    objs.push({ type: 'beam', d, y: rand(-300, 20), th: 60, warnT: 0 });
+  } else if (r < .68) mineCluster(d, cx, half);
+  else if (r < .84) {
+    const side = Math.random() < .5 ? -1 : 1;
+    objs.push({ type: 'turret', d, x: cx + side * (half - rand(40, 160)), y: G - 30, hp: 5 * diff, maxHp: 5 * diff, fireT: rand(.3, 1.2), r: 70, flash: 0 });
+  } else {
+    objs.push({ type: 'ring', d, x: cx + rand(-half * .6, half * .6), y: rand(-380, 80), R: 120 });
+  }
+}
+function mineCluster(d, cx, half) {
+  const n = 3 + Math.floor(Math.random() * 3), x0 = rand(-half * .5, half * .5);
+  for (let i = 0; i < n; i++) objs.push({ type: 'mine', d: d + rand(-150, 150), x: cx + x0 + rand(-260, 260), y: rand(-400, 120), hp: 1, r: 50, ph: rand(0, TAU), flash: 0 });
+}
+function spawnFighters() {
+  const n = 2 + Math.floor(Math.random() * Math.min(4, 1 + D / 8000)), behind = Math.random() < .45;
+  if (behind) { sfx.whoosh(); popText(W / 2, H * .2, '⚠ 후방 접근!', 22, '#ff8a6a', 1.2, -10); }
+  for (let i = 0; i < n; i++) {
+    const d0 = behind ? D - 250 - i * 120 : D + FAR * .6 + i * 200;
+    enemies.push({ type: 'fighter', d: d0, vd: speed, x: cxAt(d0) + rand(-300, 300), y: behind ? rand(-500, -350) : rand(-300, 50), ox: rand(-250, 250), oy: rand(-320, 40), amp: rand(80, 220), f: rand(.8, 1.6), t: rand(0, 5), tz: rand(1100, 2000), life: rand(7, 10), hp: 4 * (1 + D / 30000), r: 60, fireT: rand(1, 2.2), flash: 0, behind });
+  }
+}
+function spawnBoss() {
+  const hp = 320 + 160 * Math.floor(D / SECLEN);
+  boss = { type: 'boss', d: D - 500, vd: speed, x: cxAt(D), y: -420, hp, maxHp: hp, r: 280, t: 0, tz: 1800, fa: 2, fb: 4, flash: 0, enter: true, dying: 0 };
+  enemies.push(boss); sfx.whoosh(); shake = 12;
+}
+function eShot(x, y, d, col = '#ff4fa0', r = 16, closing = 1500, aimX, aimY) {
+  const p = player, tr = Math.max(.15, (d - (D + PLZ)) / closing);
+  const tx = aimX !== undefined ? aimX : p.x + p.vx * tr * .5, ty = aimY !== undefined ? aimY : p.y + p.vy * tr * .5;
+  ebullets.push({ x, y, d, pd: d, vx: (tx - x) / tr, vy: (ty - y) / tr, vd: speed - closing, r, col, t: 0 });
+}
+function damage(e, dmg) {
+  if (e.dead || e.dying) return;
+  e.hp -= dmg; e.flash = .05; sfx.hit();
+  if (e.hp <= 0) {
+    if (e.type === 'boss') return bossDie(e);
+    e.dead = true; kills++;
+    const big = e.type === 'turret' ? 1.4 : e.type === 'mine' ? 1.1 : 1.3;
+    explode(e.x, e.y, e.d, big, e.vd ? e.vd * .8 : 0);
+    const pts = e.type === 'fighter' ? 400 : e.type === 'turret' ? 300 : 100;
+    score += pts; scorePop = 1;
+    const p = proj(e.x, e.y, e.d); if (p) popText(p.x, p.y - 20, '+' + pts, e.type === 'fighter' ? 22 : 16, e.type === 'fighter' ? '#ffd06a' : '#fff');
+  }
+}
+function bossDie(e) {
+  e.dying = 2.4; e.hp = 0; slowmo = 2.2; ebullets.length = 0;
+  popText(W / 2, H * .35, 'CRITICAL HIT!', 44, '#ffd06a', 1.5, -20);
+}
+function updEnemies(dt) {
+  const p = player;
+  for (const e of enemies) {
+    e.t += dt; e.flash -= dt;
+    const z = e.d - D;
+    if (e.type === 'fighter') {
+      e.life -= dt;
+      const tz = e.life > 0 ? e.tz : 9000;
+      e.vd = speed + clamp((tz - z) * 1.6, -2400, e.life > 0 ? 2400 : 3000);
+      e.d += e.vd * dt;
+      const cx = cxAt(e.d);
+      const txx = cx + e.ox + Math.sin(e.t * e.f) * e.amp, tyy = e.oy + Math.cos(e.t * e.f * .7) * 90;
+      const pvx = e.x; e.x += (txx - e.x) * Math.min(1, dt * 2); e.y += (tyy - e.y) * Math.min(1, dt * 2);
+      e.bank = clamp((e.x - pvx) / dt / 600, -1, 1) * .8;
+      if (e.behind && z > 0 && z < 300 && !e.passed) { e.passed = true; shake = Math.max(shake, 8); }
+      e.fireT -= dt;
+      if (state === 'play' && p.alive && e.fireT <= 0 && z > 500 && z < 3500 && e.life > 0) { e.fireT = rand(1.1, 2) / (1 + D / 30000); eShot(e.x, e.y, e.d, '#ff5f8a', 16, 1500); }
+      if (e.life < 0 && z > FAR * .9) e.dead = true;
+    } else if (e.type === 'boss') {
+      if (e.dying > 0) {
+        e.dying -= dt; e.d += speed * dt; e.y += 60 * dt;
+        if (Math.random() < dt * 20) explode(e.x + rand(-350, 350), e.y + rand(-80, 80), e.d + rand(-60, 60), rand(.8, 1.8), speed);
+        shake = Math.max(shake, 7);
+        if (e.dying <= 0) {
+          e.dead = true; boss = null; explode(e.x, e.y, e.d, 5, speed);
+          for (let k = 0; k < 8; k++) later(k * .08, () => explode(e.x + rand(-400, 400), e.y + rand(-120, 120), e.d, 2, speed));
+          flash = 1; flashCol = '#fff'; shake = 40; hitstop = .15; sfx.big();
+          const pts = 15000 * Math.max(1, Math.floor(D / SECLEN) + 1); score += pts; scorePop = 1;
+          popText(W / 2, H * .35, 'FORTRESS DOWN', Math.min(50, W / 12), '#fff', 2.2, -15);
+          popText(W / 2, H * .35 + 50, '+' + pts, 30, '#ffd06a', 2.2, -15);
+          p.hp = Math.min(p.maxHp, p.hp + 40); p.boost = 1;
+        }
+        continue;
+      }
+      e.vd = speed + clamp((e.tz - z) * 1.2, -2000, 2600); e.d += e.vd * dt;
+      if (e.enter && z > e.tz - 200) { e.enter = false; popText(W / 2, H * .25, 'SKY FORTRESS', 34, '#ff7a5a', 1.6, -10); }
+      e.x += (cxAt(e.d) + Math.sin(e.t * .5) * 260 - e.x) * Math.min(1, dt * 1.5);
+      e.y += (-260 + Math.sin(e.t * .9) * 80 - e.y) * Math.min(1, dt * 1.5);
+      if (!e.enter && state === 'play' && p.alive) {
+        const rage = e.hp < e.maxHp * .5;
+        e.fa -= dt; e.fb -= dt;
+        if (e.fa <= 0) {
+          e.fa = rage ? .9 : 1.3;
+          for (let i = -3; i <= 3; i++) eShot(e.x + i * 60, e.y + 40, e.d - 100, i % 2 ? '#ffb02a' : '#ff4fa0', 20, 1400, p.x + i * 110, p.y + Math.abs(i) * 30);
+          fx2d.push({ x: W / 2, y: H / 2, R: 0, life: 0, max: 1 });
+        }
+        if (e.fb <= 0) {
+          e.fb = rage ? 2.6 : 3.8;
+          for (let i = 0; i < (rage ? 6 : 4); i++) objs.push({ type: 'mine', d: e.d - 50 - i * 90, x: e.x + rand(-350, 350), y: e.y + rand(0, 300), hp: 1, r: 50, ph: rand(0, TAU), flash: 0 });
+        }
+        if (rage && Math.random() < dt * 8) smoke(e.x + rand(-300, 300), e.y + rand(-40, 40), e.d, 0, -40, 40, 1, '#2b2b30');
+      }
+    }
+  }
+  enemies = enemies.filter(e => !e.dead && e.d - D > -600);
+  // 포탑
+  for (const o of objs) {
+    o.flash = (o.flash || 0) - dt;
+    if (o.type === 'turret' && !o.dead && state === 'play' && p.alive) {
+      const z = o.d - D; o.fireT -= dt;
+      if (o.fireT <= 0 && z > 700 && z < 3600) { o.fireT = rand(.9, 1.5); eShot(o.x, o.y - 40, o.d, '#ffb02a', 15, 1500); const pp = proj(o.x, o.y - 40, o.d); }
+    }
+    if (o.type === 'beam') o.warnT += dt;
+  }
+}
+function updCollisions(dt, prevD) {
+  const p = player, pd0 = prevD + PLZ, pd1 = D + PLZ;
+  // 플레이어 탄
+  for (let i = pbullets.length - 1; i >= 0; i--) {
+    const b = pbullets[i]; b.pd = b.d; b.life -= dt; b.x += b.vx * dt; b.y += b.vy * dt; b.d += b.vd * dt;
+    let hit = false;
+    for (const e of enemies) {
+      if (e.dying || e.dead) continue;
+      const hx = e.type === 'boss' ? 330 : e.r, hy = e.type === 'boss' ? 110 : e.r;
+      if (b.pd <= e.d + 60 && b.d >= e.d - 60 && Math.abs(b.x - e.x) < hx && Math.abs(b.y - e.y) < hy) {
+        damage(e, 1); hit = true; spark(b.x, b.y, e.d - 20, rand(-300, 300), rand(-300, 300), -600, '#fff2a0', .2, 3); flashP(b.x, b.y, e.d - 20, 30, '#ffe08a', .08); break;
+      }
+    }
+    if (!hit) for (const o of objs) {
+      if (o.dead || !(b.pd <= o.d + 50 && b.d >= o.d - 50)) continue;
+      if ((o.type === 'mine' || o.type === 'turret') && Math.abs(b.x - o.x) < o.r && Math.abs(b.y - o.y) < o.r + (o.type === 'turret' ? 30 : 0)) { damage(o, 1); hit = true; break; }
+      if (o.type === 'pillar' && Math.abs(b.x - o.x) < o.w) { hit = true; spark(b.x, b.y, o.d - 10, rand(-300, 300), rand(-300, 300), -500, '#ffffff', .2, 3); sfx.clank(); break; }
+      if (o.type === 'beam' && Math.abs(b.y - o.y) < o.th / 2) { hit = true; spark(b.x, b.y, o.d - 10, rand(-300, 300), rand(-300, 300), -500, '#ffffff', .2, 3); sfx.clank(); break; }
+    }
+    if (hit || b.life <= 0) pbullets.splice(i, 1);
+  }
+  // 적 탄
+  for (let i = ebullets.length - 1; i >= 0; i--) {
+    const b = ebullets[i]; b.pd = b.d; b.t += dt; b.x += b.vx * dt; b.y += b.vy * dt; b.d += b.vd * dt;
+    if (p.alive && b.pd >= pd1 - 10 && b.d <= pd1 + 10) {
+      if (Math.abs(b.x - p.x) < 38 && Math.abs(b.y - p.y) < 24) { if (hurt(10)) { ebullets.splice(i, 1); continue; } }
+      else if (Math.abs(b.x - p.x) < 90 && Math.abs(b.y - p.y) < 70) { score += 20; const pp = proj(p.x, p.y - 30, pd1); if (pp && can('graze', 120)) popText(pp.x, pp.y - 50, 'CLOSE!', 14, '#9fe8ff', .6, -40); }
+    }
+    if (b.d - D < NEAR) ebullets.splice(i, 1);
+  }
+  // 오브젝트 통과 판정
+  for (const o of objs) {
+    if (o.dead || o.passed) continue;
+    if (o.d > pd1 || o.d < pd0 - 1) continue;
+    o.passed = true;
+    if (!p.alive) continue;
+    if (o.type === 'ring') {
+      const dist = Math.hypot(p.x - o.x, p.y - o.y);
+      if (dist < o.R) {
+        o.got = true; rings++; ringChain++; maxChain = Math.max(maxChain, ringChain); ringPop = 1;
+        const pts = 100 * ringChain; score += pts; scorePop = 1; p.boost = Math.min(1, p.boost + .18); p.hp = Math.min(p.maxHp, p.hp + 2);
+        sfx.ring(ringChain); flash = .12; flashCol = '#ffe08a';
+        fx2d.push({ x: W / 2 + (o.x - camX) * F / PLZ * .9, y: H / 2 + (o.y - camY) * F / PLZ * .9, R: Math.max(W, H) * .7, life: .5, max: .5, w: 14, col: '#ffd06a' });
+        popText(W / 2, H * .28, ringChain > 1 ? `RING x${ringChain}  +${pts}` : `RING +${pts}`, 22, '#ffd06a', .8, -40);
+      } else { if (ringChain > 2) popText(W / 2, H * .28, 'CHAIN BREAK', 18, '#ff8a8a', .7, -30); ringChain = 0; }
+    } else if (o.type === 'pillar') {
+      if (Math.abs(p.x - o.x) < o.w + 30) { if (hurt(30)) { explode(p.x, p.y, pd1 + 40, 1.2, speed * .5); player.vx = Math.sign(p.x - o.x || 1) * 700; } }
+      else if (Math.abs(p.x - o.x) < o.w + 110) { score += 150; popText(W / 2, H * .62, 'NEAR MISS +150', 16, '#9fe8ff', .7, -40); shake = Math.max(shake, 5); sfx.whoosh(); }
+    } else if (o.type === 'beam') {
+      if (Math.abs(p.y - o.y) < o.th / 2 + 22) { if (hurt(30)) explode(p.x, p.y, pd1 + 40, 1.2, speed * .5); }
+      else if (Math.abs(p.y - o.y) < o.th / 2 + 90) { score += 150; popText(W / 2, H * .62, 'NEAR MISS +150', 16, '#9fe8ff', .7, -40); shake = Math.max(shake, 5); sfx.whoosh(); }
+    } else if (o.type === 'mine') {
+      if (Math.abs(p.x - o.x) < o.r + 30 && Math.abs(p.y - o.y) < o.r + 20) { o.dead = true; explode(o.x, o.y, o.d, 1.2); hurt(20); }
+    } else if (o.type === 'turret') {
+      if (Math.abs(p.x - o.x) < 80 && p.y > G - 120) { hurt(20); }
+    }
+  }
+  objs = objs.filter(o => !o.dead && o.d - D > -200);
+}
+
+// ================= 그리기: 지형 =================
+function quad(a, b, c, d, col) {
+  if (!a || !b || !c || !d) return;
+  ctx.fillStyle = col; ctx.strokeStyle = col; ctx.lineWidth = 1;
+  ctx.beginPath(); ctx.moveTo(a.x, a.y); ctx.lineTo(b.x, b.y); ctx.lineTo(c.x, c.y); ctx.lineTo(d.x, d.y); ctx.closePath(); ctx.fill(); ctx.stroke();
+}
+function drawSky() {
+  const pad = Math.max(W, H);
+  const g = ctx.createLinearGradient(0, -pad * .3, 0, H * .52);
+  g.addColorStop(0, rgb(pal.skyT)); g.addColorStop(1, rgb(pal.skyB));
+  ctx.fillStyle = g; ctx.fillRect(-pad, -pad, W + pad * 2, H * .52 + pad);
+  ctx.fillStyle = rgb(pal.fog); ctx.fillRect(-pad, H * .5, W + pad * 2, H * .5 + pad);
+  const sx = W * .5 + (cxAt(D + FAR) - camX) * F / FAR * .6, sy = H * .32;
+  ctx.globalCompositeOperation = 'lighter';
+  glow(sx, sy, Math.min(W, H) * .5, '#ffb070', .35); glow(sx, sy, 60, '#ffffff', .9);
+  ctx.globalCompositeOperation = 'source-over';
+  ctx.fillStyle = rgb(pal.sun); ctx.beginPath(); ctx.arc(sx, sy, 34, 0, TAU); ctx.fill();
+  // 먼 산
+  ctx.fillStyle = rgb(mixA(pal.w2, pal.fog, .6));
+  ctx.beginPath(); ctx.moveTo(-pad, H * .5 + 2);
+  const off = -camX * .05 - D * .002;
+  for (let x = -pad; x <= W + pad; x += 40) { const h = 40 + Math.sin((x + off) * .013) * 30 + Math.sin((x + off) * .031) * 18; ctx.lineTo(x, H * .5 - h); }
+  ctx.lineTo(W + pad, H * .5 + 2); ctx.closePath(); ctx.fill();
+}
+function drawTerrain() {
+  const base = Math.floor(D / SEG);
+  const lit = mixA(pal.w1, [255, 255, 255], .08);
+  for (let i = NSEG; i >= 0; i--) {
+    let d1 = (base + i) * SEG; const d2 = d1 + SEG + 2;
+    if (d2 - D < NEAR + 5) continue;
+    d1 = Math.max(d1, D + NEAR);
+    const c1 = cxAt(d1), w1 = cwAt(d1) / 2, c2 = cxAt(d2), w2 = cwAt(d2) / 2;
+    const fk = fogK(d2 - D), par = (base + i) & 1;
+    const L1g = proj(c1 - w1, G, d1), R1g = proj(c1 + w1, G, d1), L2g = proj(c2 - w2, G, d2), R2g = proj(c2 + w2, G, d2);
+    const L1t = proj(c1 - w1, G - WH, d1), R1t = proj(c1 + w1, G - WH, d1), L2t = proj(c2 - w2, G - WH, d2), R2t = proj(c2 + w2, G - WH, d2);
+    quad(L1g, R1g, R2g, L2g, rgb(mixA(par ? pal.f1 : pal.f2, pal.fog, fk)));
+    // 강
+    const rv = 70, rcol = mixA(pal.river, pal.fog, fk * .8);
+    quad(proj(c1 - rv, G - 1, d1), proj(c1 + rv, G - 1, d1), proj(c2 + rv, G - 1, d2), proj(c2 - rv, G - 1, d2), rgb(rcol));
+    // 벽 (왼쪽은 밝게, 오른쪽은 어둡게)
+    quad(L1g, L2g, L2t, L1t, rgb(mixA(par ? lit : pal.w1, pal.fog, fk)));
+    quad(R1g, R2g, R2t, R1t, rgb(mixA(par ? pal.w2 : mixA(pal.w2, [0, 0, 0], .1), pal.fog, fk)));
+    // 벽 지층 라인
+    if (par && fk < .7) {
+      ctx.strokeStyle = `rgba(0,0,0,${.12 * (1 - fk)})`; ctx.lineWidth = 2;
+      for (const hy of [G - 260, G - 620]) {
+        const a = proj(c1 - w1, hy, d1), b = proj(c2 - w2, hy, d2), c = proj(c1 + w1, hy, d1), e = proj(c2 + w2, hy, d2);
+        if (a && b && c && e) { ctx.beginPath(); ctx.moveTo(a.x, a.y); ctx.lineTo(b.x, b.y); ctx.moveTo(c.x, c.y); ctx.lineTo(e.x, e.y); ctx.stroke(); }
+      }
+    }
+  }
+  if (pal.lava) {
+    ctx.globalCompositeOperation = 'lighter';
+    for (let i = 2; i < 30; i += 2) { const d = (base + i) * SEG; const p = proj(cxAt(d), G, d); if (p) glow(p.x, p.y, 140 * p.s, '#ff6a1a', .35 * (1 - fogK(d - D))); }
+    ctx.globalCompositeOperation = 'source-over';
+  }
+}
+
+// ================= 그리기: 오브젝트 =================
+function drawRearJet(sx, sy, s, bank, palt, white, boostGlow) {
+  ctx.save(); ctx.translate(sx, sy); ctx.rotate(bank); ctx.scale(s, s);
+  const C = c => white ? '#fff' : c;
+  // 날개
+  ctx.fillStyle = C(palt.wing);
+  ctx.beginPath(); ctx.moveTo(-14, -2); ctx.lineTo(-64, 6); ctx.lineTo(-66, 11); ctx.lineTo(-14, 9); ctx.lineTo(14, 9); ctx.lineTo(66, 11); ctx.lineTo(64, 6); ctx.lineTo(14, -2); ctx.closePath(); ctx.fill();
+  ctx.fillStyle = C(palt.tip); ctx.fillRect(-66, 5, 8, 6); ctx.fillRect(58, 5, 8, 6);
+  // 수평 꼬리
+  ctx.fillStyle = C(palt.dark); ctx.beginPath(); ctx.moveTo(-10, 8); ctx.lineTo(-34, 14); ctx.lineTo(-34, 18); ctx.lineTo(-8, 15); ctx.moveTo(10, 8); ctx.lineTo(34, 14); ctx.lineTo(34, 18); ctx.lineTo(8, 15); ctx.fill();
+  // 수직 꼬리날개 (경사)
+  ctx.fillStyle = C(palt.wing);
+  ctx.beginPath(); ctx.moveTo(-8, -6); ctx.lineTo(-17, -34); ctx.lineTo(-13, -35); ctx.lineTo(-4, -8); ctx.moveTo(8, -6); ctx.lineTo(17, -34); ctx.lineTo(13, -35); ctx.lineTo(4, -8); ctx.fill();
+  // 동체
+  if (white) ctx.fillStyle = '#fff'; else { const g = ctx.createRadialGradient(-4, -6, 2, 0, 0, 18); g.addColorStop(0, palt.bodyL); g.addColorStop(1, palt.bodyD); ctx.fillStyle = g; }
+  ctx.beginPath(); ctx.ellipse(0, 2, 17, 13, 0, 0, TAU); ctx.fill();
+  if (!white) { ctx.fillStyle = palt.glass; ctx.beginPath(); ctx.ellipse(0, -9, 6, 4, 0, 0, TAU); ctx.fill(); }
+  // 엔진
+  for (const ex of [-7, 7]) { ctx.fillStyle = C('#1a1a22'); ctx.beginPath(); ctx.arc(ex, 6, 6.5, 0, TAU); ctx.fill(); }
+  ctx.globalCompositeOperation = 'lighter';
+  for (const ex of [-7, 7]) { glow(ex, 6, (boostGlow ? 22 : 13) + Math.random() * 4, palt.flame, 1); glow(ex, 6, 5, '#ffffff', .9); }
+  ctx.globalCompositeOperation = 'source-over';
+  ctx.restore();
+}
+const PPAL = { wing: '#3a6ff0', dark: '#24479e', tip: '#ff7a2a', bodyL: '#f4f8fc', bodyD: '#7f8ca0', glass: '#7ff0ff', flame: '#4fb8ff' };
+const EPAL = { wing: '#c0303f', dark: '#7a1a26', tip: '#ffd34a', bodyL: '#e8dada', bodyD: '#6a5050', glass: '#ffd34a', flame: '#ff7040' };
+const BPAL = { wing: '#3a4252', dark: '#262c38', tip: '#ff4a4a', bodyL: '#8a96b0', bodyD: '#2a3040', glass: '#ff4040', flame: '#ff8a3a' };
+function drawObj(o) {
+  const z = o.d - D, fk = fogK(z), alpha = (1 - clamp((z - FAR * .8) / (FAR * .2), 0, 1)) * clamp((z - 50) / 190, 0, 1);
+  if (alpha <= 0) return;
+  ctx.globalAlpha = alpha;
+  if (o.type === 'ring') {
+    const p = proj(o.x, o.y, o.d); if (!p) return;
+    const r = o.R * p.s, pulse = 1 + Math.sin(t * 6 + o.d) * .04;
+    ctx.globalCompositeOperation = 'lighter';
+    glow(p.x, p.y, r * 1.5, '#ffb030', .25 * alpha);
+    ctx.strokeStyle = o.got ? 'rgba(255,255,255,.9)' : `rgba(255,208,106,${.95 * alpha})`; ctx.lineWidth = Math.max(2, 14 * p.s);
+    ctx.beginPath(); ctx.arc(p.x, p.y, r * pulse, 0, TAU); ctx.stroke();
+    ctx.strokeStyle = `rgba(255,255,255,${.7 * alpha})`; ctx.lineWidth = Math.max(1, 4 * p.s);
+    ctx.beginPath(); ctx.arc(p.x, p.y, r * pulse, t * 3, t * 3 + 1.2); ctx.stroke(); ctx.beginPath(); ctx.arc(p.x, p.y, r * pulse, t * 3 + Math.PI, t * 3 + Math.PI + 1.2); ctx.stroke();
+    ctx.globalCompositeOperation = 'source-over';
+  } else if (o.type === 'pillar') {
+    const a = proj(o.x - o.w, G, o.d), b = proj(o.x + o.w, G, o.d), c = proj(o.x + o.w, G - WH, o.d), e = proj(o.x - o.w, G - WH, o.d);
+    if (!a) return;
+    const g = ctx.createLinearGradient(a.x, 0, b.x, 0);
+    g.addColorStop(0, rgb(mixA(mixA(pal.w1, [255, 255, 255], .1), pal.fog, fk))); g.addColorStop(.6, rgb(mixA(pal.w2, pal.fog, fk))); g.addColorStop(1, rgb(mixA(mixA(pal.w2, [0, 0, 0], .3), pal.fog, fk)));
+    ctx.fillStyle = g; ctx.beginPath(); ctx.moveTo(a.x, a.y); ctx.lineTo(b.x, b.y); ctx.lineTo(c.x, c.y); ctx.lineTo(e.x, e.y); ctx.closePath(); ctx.fill();
+    ctx.strokeStyle = `rgba(0,0,0,${.15 * (1 - fk)})`; ctx.lineWidth = 2;
+    for (const hy of [G - 200, G - 450, G - 800]) { const l = proj(o.x - o.w, hy, o.d), r2 = proj(o.x + o.w, hy, o.d); ctx.beginPath(); ctx.moveTo(l.x, l.y); ctx.lineTo(r2.x, r2.y); ctx.stroke(); }
+  } else if (o.type === 'beam') {
+    const cx = cxAt(o.d), w = cwAt(o.d) / 2;
+    const a = proj(cx - w, o.y - o.th / 2, o.d), b = proj(cx + w, o.y - o.th / 2, o.d), c = proj(cx + w, o.y + o.th / 2, o.d), e = proj(cx - w, o.y + o.th / 2, o.d);
+    if (!a) return;
+    ctx.fillStyle = rgb(mixA([60, 60, 70], pal.fog, fk)); ctx.beginPath(); ctx.moveTo(a.x, a.y); ctx.lineTo(b.x, b.y); ctx.lineTo(c.x, c.y); ctx.lineTo(e.x, e.y); ctx.closePath(); ctx.fill();
+    ctx.save(); ctx.clip();
+    ctx.fillStyle = rgb(mixA([255, 200, 0], pal.fog, fk)); const h = c.y - b.y, step = h * 2;
+    for (let x = a.x - h; x < b.x + h; x += step) { ctx.beginPath(); ctx.moveTo(x, a.y); ctx.lineTo(x + h, a.y); ctx.lineTo(x, e.y); ctx.lineTo(x - h, e.y); ctx.fill(); }
+    ctx.restore();
+    const on = Math.floor(t * 6) % 2 === 0;
+    if (on) { ctx.globalCompositeOperation = 'lighter'; for (let i = -2; i <= 2; i++) { const l = proj(cx + i * w * .4, o.y - o.th / 2, o.d); glow(l.x, l.y, 40 * l.s + 4, '#ff3030', .9 * alpha); } ctx.globalCompositeOperation = 'source-over'; }
+  } else if (o.type === 'mine') {
+    const bob = Math.sin(t * 2 + o.ph) * 20, p = proj(o.x, o.y + bob, o.d); if (!p) return;
+    const r = o.r * p.s;
+    ctx.fillStyle = o.flash > 0 ? '#fff' : rgb(mixA([70, 30, 40], pal.fog, fk));
+    ctx.save(); ctx.translate(p.x, p.y); ctx.rotate(t + o.ph);
+    ctx.beginPath(); for (let i = 0; i < 16; i++) { const a = i * TAU / 16, rr = i % 2 ? r * .75 : r * 1.15; i ? ctx.lineTo(Math.cos(a) * rr, Math.sin(a) * rr) : ctx.moveTo(rr, 0); } ctx.closePath(); ctx.fill();
+    ctx.restore();
+    ctx.globalCompositeOperation = 'lighter'; glow(p.x, p.y, r * (Math.floor(t * 5 + o.ph) % 2 ? 1.2 : .6), '#ff2a2a', .9 * alpha); ctx.globalCompositeOperation = 'source-over';
+  } else if (o.type === 'turret') {
+    const p = proj(o.x, o.y, o.d); if (!p) return; const s = p.s;
+    ctx.fillStyle = o.flash > 0 ? '#fff' : rgb(mixA([60, 66, 80], pal.fog, fk));
+    ctx.fillRect(p.x - 70 * s, p.y - 30 * s, 140 * s, 60 * s);
+    ctx.fillStyle = o.flash > 0 ? '#fff' : rgb(mixA([90, 98, 116], pal.fog, fk));
+    ctx.beginPath(); ctx.arc(p.x, p.y - 30 * s, 45 * s, Math.PI, 0); ctx.fill();
+    const pp = player, aa = Math.atan2((pp.y - o.y), (pp.x - o.x)) * .3;
+    ctx.save(); ctx.translate(p.x, p.y - 50 * s); ctx.rotate(aa); ctx.fillStyle = '#20242e'; ctx.fillRect(-10 * s, -70 * s, 20 * s, 60 * s); ctx.restore();
+    ctx.globalCompositeOperation = 'lighter'; glow(p.x, p.y - 40 * s, 22 * s + 2, '#ff3030', (.6 + Math.sin(t * 8) * .4) * alpha); ctx.globalCompositeOperation = 'source-over';
+  }
+  ctx.globalAlpha = 1;
+}
+function drawEnemy(e) {
+  const p = proj(e.x, e.y, e.d); if (!p) return;
+  if (e.type === 'fighter') drawRearJet(p.x, p.y, p.s * 1.25, e.bank || 0, EPAL, e.flash > 0, false);
+  else if (e.type === 'boss') drawBoss(e, p);
+}
+function drawBoss(e, p) {
+  const s = p.s, w = e.flash > 0;
+  ctx.save(); ctx.translate(p.x, p.y); ctx.rotate(Math.sin(e.t * .5) * .06 + (e.dying > 0 ? Math.sin(e.t * 20) * .05 : 0)); ctx.scale(s, s);
+  const C = c => w ? '#fff' : c;
+  ctx.fillStyle = C('#2a303e');
+  ctx.beginPath(); ctx.moveTo(-60, -30); ctx.lineTo(-420, 10); ctx.lineTo(-430, 34); ctx.lineTo(-60, 40); ctx.lineTo(60, 40); ctx.lineTo(430, 34); ctx.lineTo(420, 10); ctx.lineTo(60, -30); ctx.closePath(); ctx.fill();
+  ctx.fillStyle = C('#3c4558'); ctx.fillRect(-400, 14, 340, 10); ctx.fillRect(60, 14, 340, 10);
+  ctx.fillStyle = C('#ff4a4a'); ctx.fillRect(-432, 12, 14, 14); ctx.fillRect(418, 12, 14, 14);
+  ctx.fillStyle = C('#3a4252'); ctx.beginPath(); ctx.moveTo(-30, -40); ctx.lineTo(-60, -150); ctx.lineTo(-40, -150); ctx.lineTo(-5, -40); ctx.moveTo(30, -40); ctx.lineTo(60, -150); ctx.lineTo(40, -150); ctx.lineTo(5, -40); ctx.fill();
+  const g = ctx.createRadialGradient(-20, -20, 10, 0, 0, 90); g.addColorStop(0, '#8a96b0'); g.addColorStop(1, '#1e2430');
+  ctx.fillStyle = w ? '#fff' : g; ctx.beginPath(); ctx.ellipse(0, 0, 90, 60, 0, 0, TAU); ctx.fill();
+  for (const ex of [-300, -180, 180, 300]) { ctx.fillStyle = C('#14161c'); ctx.beginPath(); ctx.arc(ex, 30, 26, 0, TAU); ctx.fill(); }
+  ctx.globalCompositeOperation = 'lighter';
+  for (const ex of [-300, -180, 180, 300]) { glow(ex, 30, 60 + Math.random() * 12, '#ff8a3a', .9); glow(ex, 30, 18, '#ffffff', .8); }
+  const core = .6 + Math.sin(t * 6) * .4; glow(0, 10, 50, e.hp < e.maxHp * .5 ? '#ff3a5a' : '#ffd04a', core);
+  ctx.globalCompositeOperation = 'source-over';
+  ctx.restore();
+}
+function drawBullets() {
+  ctx.globalCompositeOperation = 'lighter'; ctx.lineCap = 'round';
+  for (const b of pbullets) {
+    const a = proj(b.x, b.y, b.d), c = proj(b.x - b.vx * .03, b.y - b.vy * .03, b.d - 160); if (!a || !c) continue;
+    ctx.strokeStyle = 'rgba(255,220,120,.9)'; ctx.lineWidth = Math.max(1.5, 10 * a.s); ctx.beginPath(); ctx.moveTo(a.x, a.y); ctx.lineTo(c.x, c.y); ctx.stroke();
+  }
+  for (const b of ebullets) {
+    const p = proj(b.x, b.y, b.d); if (!p) continue;
+    glow(p.x, p.y, b.r * 3 * p.s * (1 + Math.sin(b.t * 20) * .15), b.col, .9); glow(p.x, p.y, b.r * .9 * p.s, '#ffffff', 1);
+  }
+  ctx.globalCompositeOperation = 'source-over';
+}
+function drawPlayer() {
+  const p = player; if (!p.alive) return;
+  const pp = proj(p.x, p.y, D + PLZ); if (!pp) return;
+  const r = p.bank + (p.roll > 0 ? (1 - p.roll / ROLL_T) * TAU * p.rollDir : 0);
+  // 그림자 (바닥)
+  const sh = proj(p.x, G, D + PLZ);
+  if (sh) { ctx.fillStyle = `rgba(0,0,0,${.25 * clamp(1 - (G - p.y) / 700, .1, 1)})`; ctx.beginPath(); ctx.ellipse(sh.x, sh.y, 60 * sh.s, 10 * sh.s, 0, 0, TAU); ctx.fill(); }
+  const blink = p.inv > 0 && p.roll <= 0 && Math.floor(p.inv * 20) % 2 === 0;
+  ctx.globalAlpha = blink ? .4 : 1;
+  ctx.save(); ctx.translate(0, 0);
+  const sy = 1 - Math.abs(p.pitch) * .12;
+  ctx.translate(pp.x, pp.y); ctx.scale(1, sy); ctx.translate(-pp.x, -pp.y);
+  drawRearJet(pp.x, pp.y, pp.s * .5, r, PPAL, false, p.boosting);
+  ctx.restore();
+  ctx.globalAlpha = 1;
+  if (p.muzzle > 0) { ctx.globalCompositeOperation = 'lighter'; for (const s of [-1, 1]) glow(pp.x + s * 11 * pp.s * Math.cos(r), pp.y - 5 * pp.s, 14, '#ffe08a', .8); ctx.globalCompositeOperation = 'source-over'; }
+}
+function drawCrosshair() {
+  const p = player; if (!p.alive || state !== 'play') return;
+  const c = proj(p.x, p.y, D + PLZ + 1600); if (!c) return;
+  let locked = false;
+  for (const e of enemies) { const z = e.d - D; if (z > PLZ + 100 && z < 4200 && !e.dying && Math.abs(e.x - p.x) < e.r + 140 && Math.abs(e.y - p.y) < e.r + 140) locked = true; }
+  ctx.save(); ctx.translate(c.x, c.y); ctx.rotate(locked ? t * 3 : 0);
+  ctx.strokeStyle = locked ? '#ff4040' : 'rgba(150,255,200,.85)'; ctx.lineWidth = 2;
+  const r = locked ? 16 : 22;
+  for (let i = 0; i < 4; i++) { ctx.rotate(Math.PI / 2); ctx.beginPath(); ctx.moveTo(r, 0); ctx.lineTo(r + 10, 0); ctx.stroke(); }
+  ctx.beginPath(); ctx.arc(0, 0, 3, 0, TAU); ctx.stroke();
+  ctx.restore();
+}
+
+// ================= 게임 흐름 =================
+function startGame() {
+  initAudio(); state = 'play'; paused = false;
+  D = 0; speed = 900; camX = cxAt(0); objs = []; enemies = []; pbullets = []; ebullets = []; parts = []; texts = []; fx2d = []; timers = [];
+  player = newPlayer(); player.inv = 1.5;
+  score = 0; dispScore = 0; ringChain = 0; kills = 0; maxChain = 0; rings = 0; newRecord = false; overAnim = 0;
+  nextD = 1400; fighterT = 5; nextBossD = 7000; boss = null; curSector = 0;
+  banner = { txt: 'SECTOR 1', sub: SECTORS[0].name, t: 0, dur: 2.4 };
+  sfx.boost(); flash = .5; flashCol = '#ffffff';
+}
+function update(dt, rdt) {
+  t += dt;
+  shake *= Math.pow(.004, rdt); if (shake < .1) shake = 0;
+  flash = Math.max(0, flash - rdt * 2.5); hurtFlash = Math.max(0, hurtFlash - rdt * 2);
+  scorePop = Math.max(0, scorePop - rdt * 5); ringPop = Math.max(0, ringPop - rdt * 4);
+  if (banner) { banner.t += rdt; if (banner.t > banner.dur) banner = null; }
+  const p = player;
+  // 속도
+  const baseSpd = 1500 + Math.min(900, D / 60);
+  const tSpd = state === 'title' ? 1500 : !p.alive ? 300 : p.boosting ? baseSpd + 1100 : baseSpd;
+  speed += (tSpd - speed) * Math.min(1, dt * (p.boosting ? 3 : 1.2));
+  const prevD = D; D += speed * dt;
+  updPalette();
+  fovK += ((p.boosting ? 0.78 : 1) - fovK) * Math.min(1, dt * 4);
+  F = Math.min(W, H * 1.4) * .82 * fovK;
+  if (windG) windG.gain.value = state === 'play' ? clamp((speed - 800) / 4000, 0, .25) : .05;
+  // 카메라
+  const pd = D + PLZ;
+  camX += (p.x * .6 + cxAt(pd) * .4 - camX) * Math.min(1, dt * 6);
+  camY += (p.y * .55 - 110 - camY) * Math.min(1, dt * 6);
+  camRoll += ((p.bank * .35 + (cxAt(D + 2500) - cxAt(D + 500)) * -.0002) - camRoll) * Math.min(1, dt * 4);
+  if (state === 'title') { titleT += rdt; updPlayer(dt); updParts(dt); return; }
+  for (let i = timers.length - 1; i >= 0; i--) { const tm = timers[i]; if (!tm) continue; tm.t -= dt; if (tm.t <= 0) { timers.splice(i, 1); tm.fn(); } }
+  updPlayer(dt);
+  // 생성
+  while (D + FAR - 400 > nextD) { spawnAt(nextD); nextD += rand(550, 950) / Math.min(1.6, 1 + D / 30000); }
+  if (!boss) { fighterT -= dt; if (fighterT <= 0 && p.alive) { fighterT = rand(5, 8) / Math.min(1.8, 1 + D / 25000); spawnFighters(); } }
+  if (!boss && D > nextBossD && p.alive) { nextBossD += SECLEN; banner = { txt: 'WARNING', sub: '하늘 요새 접근 중!', t: 0, dur: 3, warn: true }; sfx.warn(); later(2.2, spawnBoss); }
+  const sec = Math.floor(D / SECLEN);
+  if (sec !== curSector) { curSector = sec; banner = { txt: 'SECTOR ' + (sec + 1), sub: SECTORS[sec % 3].name, t: 0, dur: 2.4 }; sfx.sector(); score += 3000; p.hp = Math.min(p.maxHp, p.hp + 25); }
+  updEnemies(dt);
+  updCollisions(dt, prevD);
+  updParts(dt);
+  if (p.alive) score += Math.floor(speed * dt / 10);
+  dispScore += (score - dispScore) * Math.min(1, dt * 10); if (Math.abs(score - dispScore) < 1) dispScore = score;
+  if (state === 'play' && !p.alive) { overT -= rdt; if (overT <= 0) { state = 'over'; overAnim = 0; } }
+  if (state === 'over') overAnim += rdt;
+}
+
+// ================= 그리기: 화면 =================
+function drawSpeedLines() {
+  const k = clamp((speed - 1400) / 1800, 0, 1); if (k <= 0) return;
+  ctx.strokeStyle = `rgba(255,255,255,${.12 + k * .25})`; ctx.lineWidth = 1.5;
+  const cx = W / 2, cy = H / 2;
+  for (let i = 0; i < 40 * k + 6; i++) {
+    const a = rand(0, TAU), r0 = rand(.35, .7) * Math.max(W, H) * .6, l = rand(40, 160) * (.5 + k);
+    ctx.beginPath(); ctx.moveTo(cx + Math.cos(a) * r0, cy + Math.sin(a) * r0); ctx.lineTo(cx + Math.cos(a) * (r0 + l), cy + Math.sin(a) * (r0 + l)); ctx.stroke();
+  }
+}
+function drawHUD() {
+  const p = player;
+  ctx.textBaseline = 'alphabetic'; ctx.textAlign = 'left';
+  ctx.font = `600 11px ${FONT}`; ctx.fillStyle = 'rgba(255,255,255,.75)'; ctx.fillText('SCORE', 22, 70);
+  ctx.save(); ctx.translate(22, 100); const ss = 1 + scorePop * .1; ctx.scale(ss, ss); ctx.font = `900 28px ${FONT}`;
+  const st = String(Math.floor(dispScore)).padStart(8, '0'); ctx.fillStyle = 'rgba(0,0,0,.4)'; ctx.fillText(st, 2, 2); ctx.fillStyle = '#fff'; ctx.fillText(st, 0, 0); ctx.restore();
+  ctx.font = `600 12px ${FONT}`; ctx.fillStyle = '#ffd06a'; ctx.fillText(`${Math.floor(D / 10)} m   SECTOR ${curSector + 1}   KILLS ${kills}`, 22, 120);
+  // 속도계
+  const kmh = Math.round(speed * .6);
+  ctx.textAlign = 'center'; ctx.font = `900 ${Math.min(34, W / 14)}px ${FONT}`; ctx.fillStyle = p.boosting ? '#9fe8ff' : '#fff';
+  ctx.fillText(kmh, W / 2, H - 30); ctx.font = `600 10px ${FONT}`; ctx.fillStyle = 'rgba(255,255,255,.7)'; ctx.fillText('KM/H', W / 2, H - 14);
+  const arcR = 54; ctx.lineWidth = 5; ctx.strokeStyle = 'rgba(255,255,255,.15)'; ctx.beginPath(); ctx.arc(W / 2, H - 40, arcR, Math.PI * 1.15, Math.PI * 1.85); ctx.stroke();
+  ctx.strokeStyle = p.boosting ? '#9fe8ff' : '#ffd06a'; ctx.beginPath(); ctx.arc(W / 2, H - 40, arcR, Math.PI * 1.15, Math.PI * (1.15 + .7 * clamp(speed / 4000, 0, 1))); ctx.stroke();
+  // 체력 / 부스트
+  const bw = Math.min(220, W * .32), bx = 22;
+  const bar = (y, label, v, lag, col) => {
+    ctx.textAlign = 'left'; ctx.font = `600 10px ${FONT}`; ctx.fillStyle = 'rgba(255,255,255,.85)'; ctx.fillText(label, bx, y - 6);
+    ctx.fillStyle = 'rgba(0,0,0,.5)'; rrect(bx - 3, y - 3, bw + 6, 16, 6); ctx.fill();
+    if (lag !== null) { ctx.fillStyle = 'rgba(255,255,255,.7)'; ctx.fillRect(bx, y, bw * clamp(lag, 0, 1), 10); }
+    ctx.fillStyle = col; ctx.fillRect(bx, y, bw * clamp(v, 0, 1), 10);
+  };
+  const hr = p.hp / p.maxHp, low = hr < .3 && Math.floor(t * 6) % 2 === 0;
+  bar(H - 30, 'HULL', hr, p.hpLag / p.maxHp, low ? '#fff' : hr > .5 ? '#4dff9a' : hr > .25 ? '#ffd84a' : '#ff4a4a');
+  bar(H - 66, 'BOOST  [SHIFT]', p.boost, null, p.boosting ? '#ffffff' : '#6ae0ff');
+  const rr = clamp(1 - p.rollCd / 1.1, 0, 1); ctx.strokeStyle = rr >= 1 ? '#9fe8ff' : 'rgba(255,255,255,.3)'; ctx.lineWidth = 3;
+  ctx.beginPath(); ctx.arc(bx + bw + 26, H - 24, 11, -Math.PI / 2, -Math.PI / 2 + TAU * rr); ctx.stroke();
+  ctx.font = `900 9px ${FONT}`; ctx.textAlign = 'center'; ctx.fillStyle = rr >= 1 ? '#9fe8ff' : 'rgba(255,255,255,.4)'; ctx.fillText('R', bx + bw + 26, H - 20);
+  // 링 체인
+  if (ringChain > 1) {
+    ctx.save(); ctx.translate(W - 24, 64); const s = 1 + ringPop * .45; ctx.scale(s, s); ctx.rotate(-.06); ctx.textAlign = 'right';
+    ctx.font = `900 40px ${FONT}`; ctx.lineWidth = 6; ctx.strokeStyle = 'rgba(0,0,0,.45)'; ctx.strokeText('x' + ringChain, 0, 0); ctx.fillStyle = '#ffd06a'; ctx.fillText('x' + ringChain, 0, 0);
+    ctx.font = `900 12px ${FONT}`; ctx.fillStyle = '#fff'; ctx.fillText('RING CHAIN', 0, 18); ctx.restore();
+  }
+  // 보스 바
+  if (boss && !boss.enter) {
+    const w = Math.min(500, W - 40), x = (W - w) / 2, y = W < 700 ? 150 : 28;
+    ctx.fillStyle = 'rgba(0,0,0,.55)'; rrect(x - 4, y - 4, w + 8, 18, 6); ctx.fill();
+    ctx.fillStyle = boss.flash > 0 ? '#fff' : '#ff4a5a'; ctx.fillRect(x, y, w * Math.max(0, boss.hp / boss.maxHp), 10);
+    ctx.font = `900 12px ${FONT}`; ctx.textAlign = 'center'; ctx.fillStyle = '#ffd0d8'; ctx.fillText('SKY FORTRESS', W / 2, y + 30);
+  }
+  if (isTouch) {
+    const b = { x: W - 64, y: H - 74 }; ctx.globalAlpha = p.boost > .05 ? .85 : .3; ctx.fillStyle = 'rgba(10,20,40,.5)'; ctx.strokeStyle = '#6ae0ff'; ctx.lineWidth = 3;
+    ctx.beginPath(); ctx.arc(b.x, b.y, 38, 0, TAU); ctx.fill(); ctx.stroke(); ctx.fillStyle = '#6ae0ff'; ctx.font = `900 11px ${FONT}`; ctx.textAlign = 'center'; ctx.textBaseline = 'middle'; ctx.fillText('BOOST', b.x, b.y); ctx.textBaseline = 'alphabetic'; ctx.globalAlpha = 1;
+  }
+}
+function drawFx2d() {
+  for (const r of fx2d) {
+    if (!r.R) continue; const f = r.life / r.max;
+    ctx.globalAlpha = f; ctx.strokeStyle = r.col; ctx.lineWidth = Math.max(.5, r.w * f);
+    ctx.beginPath(); ctx.arc(r.x, r.y, (r.r0 || 0) + r.R * easeOutCubic(1 - f), 0, TAU); ctx.stroke();
+  }
+  ctx.globalAlpha = 1;
+}
+function drawTexts() {
+  ctx.textAlign = 'center'; ctx.textBaseline = 'middle';
+  for (const x of texts) {
+    const age = x.max - x.life, f = x.life / x.max, s = age < .18 ? easeOutBack(age / .18) : 1;
+    ctx.save(); ctx.translate(x.x, x.y); ctx.scale(s, s); ctx.globalAlpha = Math.min(1, f * 2.5);
+    ctx.font = `900 ${x.size}px ${FONT}, ${KFONT}`; ctx.lineWidth = Math.max(3, x.size / 6); ctx.strokeStyle = 'rgba(0,0,0,.55)'; ctx.strokeText(x.txt, 0, 0);
+    ctx.fillStyle = x.col; ctx.fillText(x.txt, 0, 0); ctx.restore();
+  }
+  ctx.globalAlpha = 1;
+}
+function drawBanner() {
+  if (!banner) return;
+  const b = banner, T = b.t, D2 = b.dur, y = H * .38, acc = b.warn ? '#ff3a4a' : '#ffd06a';
+  const inP = clamp(T / .45, 0, 1), outP = clamp((T - (D2 - .4)) / .4, 0, 1), band = easeOutCubic(clamp(T / .25, 0, 1)) * (1 - easeInCubic(outP)), bh = 120 * band;
+  ctx.save();
+  ctx.fillStyle = b.warn ? 'rgba(110,0,15,.55)' : 'rgba(30,10,20,.45)'; ctx.fillRect(0, y - bh / 2, W, bh);
+  ctx.fillStyle = acc; ctx.fillRect(0, y - bh / 2, W * easeOutCubic(inP), 2); ctx.fillRect(W * (1 - easeOutCubic(inP)), y + bh / 2 - 2, W, 2);
+  const tx = W / 2 + (1 - easeOutCubic(inP)) * W * .9 - easeInCubic(outP) * W * .9;
+  ctx.translate(tx, y); ctx.transform(1, 0, -.18, 1, 0, 0); ctx.textAlign = 'center'; ctx.textBaseline = 'middle';
+  if (b.warn && Math.floor(T * 6) % 2) ctx.globalAlpha = .45;
+  ctx.font = `900 ${Math.min(68, W / 8)}px ${FONT}`; ctx.shadowColor = acc; ctx.shadowBlur = 24; ctx.fillStyle = '#fff'; ctx.fillText(b.txt, 0, -10); ctx.shadowBlur = 0; ctx.globalAlpha = 1;
+  ctx.font = `700 17px ${KFONT}`; ctx.fillStyle = acc; ctx.fillText(b.sub, 0, 34);
+  ctx.restore();
+}
+function drawTitle() {
+  ctx.fillStyle = 'rgba(20,5,20,.25)'; ctx.fillRect(0, 0, W, H);
+  const fs = Math.min(84, W / 9), y = H * .22;
+  ctx.textAlign = 'center'; ctx.textBaseline = 'middle';
+  // 원근 줌인 타이틀
+  const k = clamp(titleT / .9, 0, 1), sc = lerp(4, 1, easeOutCubic(k));
+  ctx.save(); ctx.translate(W / 2, y); ctx.scale(sc, sc); ctx.globalAlpha = k;
+  ctx.font = `900 ${fs}px ${FONT}`;
+  const g = ctx.createLinearGradient(0, -fs / 2, 0, fs / 2); g.addColorStop(0, '#fff4c0'); g.addColorStop(.55, '#ffb030'); g.addColorStop(1, '#d0401a');
+  ctx.lineWidth = 8; ctx.strokeStyle = 'rgba(30,5,20,.85)'; ctx.strokeText('CANYON', 0, -fs * .45); ctx.fillStyle = g; ctx.fillText('CANYON', 0, -fs * .45);
+  ctx.font = `900 ${fs * .9}px ${FONT}`; ctx.strokeText('RUSH', 0, fs * .5); ctx.fillText('RUSH', 0, fs * .5);
+  ctx.restore();
+  ctx.globalAlpha = clamp(titleT - .9, 0, 1);
+  ctx.font = `800 ${Math.min(20, W / 20)}px ${KFONT}`; ctx.fillStyle = '#ffe0b0'; ctx.fillText('—  협곡을 초고속으로 돌파하라  —', W / 2, y + fs * 1.35);
+  const lines = [['조종', '마우스 · WASD / 방향키 · 드래그'], ['부스트', 'SHIFT 누르기 · BOOST 버튼'], ['배럴 롤 (무적)', '클릭 · SPACE · 더블탭'], ['사격', '자동 (조준선 근처 자동 유도)'], ['링 통과', '점수 연쇄 + 부스트 충전']];
+  const pw = Math.min(440, W - 40), ph = lines.length * 25 + 22, py = H * .5;
+  ctx.fillStyle = 'rgba(30,8,20,.55)'; rrect(W / 2 - pw / 2, py, pw, ph, 12); ctx.fill();
+  ctx.font = `700 13px ${KFONT}`; ctx.textBaseline = 'alphabetic';
+  lines.forEach(([a, b], i) => { ctx.textAlign = 'left'; ctx.fillStyle = '#ffd06a'; ctx.fillText(a, W / 2 - pw / 2 + 18, py + 26 + i * 25); ctx.textAlign = 'right'; ctx.fillStyle = '#fff'; ctx.fillText(b, W / 2 + pw / 2 - 18, py + 26 + i * 25); });
+  ctx.textAlign = 'center';
+  ctx.globalAlpha = clamp(titleT - 1.2, 0, 1) * (.55 + .45 * Math.sin(t * 5));
+  ctx.font = `900 ${Math.min(22, W / 20)}px ${FONT}`; ctx.fillStyle = '#fff'; ctx.fillText('PRESS SPACE / TAP TO START', W / 2, py + ph + 40);
+  ctx.globalAlpha = 1;
+  ctx.font = `700 13px ${KFONT}`; ctx.fillStyle = 'rgba(255,255,255,.7)'; ctx.fillText((best ? 'BEST ' + best + '   ·   ' : '') + 'M: 게임 선택 메뉴', W / 2, py + ph + 72);
+}
+function drawOver() {
+  const k = clamp(overAnim / .6, 0, 1);
+  ctx.fillStyle = `rgba(10,0,8,${.6 * k})`; ctx.fillRect(0, 0, W, H);
+  ctx.textAlign = 'center'; ctx.textBaseline = 'middle';
+  const fs = Math.min(70, W / 9), y = H * .34 + (1 - easeOutBack(k)) * -80;
+  ctx.font = `900 ${fs}px ${FONT}`; ctx.globalAlpha = k;
+  ctx.globalCompositeOperation = 'lighter'; const gx = Math.random() < .15 ? rand(-10, 10) : rand(-2, 2);
+  ctx.fillStyle = 'rgba(255,40,60,.8)'; ctx.fillText('CRASHED', W / 2 + gx + 3, y); ctx.fillStyle = 'rgba(40,200,255,.8)'; ctx.fillText('CRASHED', W / 2 - gx - 3, y);
+  ctx.globalCompositeOperation = 'source-over'; ctx.fillStyle = '#fff'; ctx.fillText('CRASHED', W / 2, y);
+  const sk = clamp((overAnim - .5) / 1, 0, 1);
+  ctx.font = `900 ${Math.min(40, W / 14)}px ${FONT}`; ctx.fillStyle = '#ffd06a'; ctx.fillText(Math.floor(score * easeOutCubic(sk)), W / 2, y + fs * 1.1);
+  ctx.font = `700 15px ${KFONT}`; ctx.fillStyle = 'rgba(255,255,255,.85)'; ctx.fillText(`${Math.floor(D / 10)}m 비행  ·  격파 ${kills}  ·  링 ${rings}  ·  최대 연쇄 ${maxChain}`, W / 2, y + fs * 1.1 + 44);
+  if (newRecord && sk >= 1) { const s = 1 + Math.sin(t * 8) * .08; ctx.save(); ctx.translate(W / 2, y + fs * 1.1 + 80); ctx.scale(s, s); ctx.font = `900 22px ${FONT}`; ctx.fillStyle = `hsl(${(t * 200) % 360},100%,65%)`; ctx.fillText('NEW RECORD!', 0, 0); ctx.restore(); }
+  if (overAnim > 1) { ctx.globalAlpha = .55 + .45 * Math.sin(t * 5); ctx.font = `900 18px ${FONT}`; ctx.fillStyle = '#fff'; ctx.fillText('PRESS SPACE / TAP TO RETRY', W / 2, H * .78); ctx.globalAlpha = .7; ctx.font = `700 14px ${KFONT}`; ctx.fillText('M: 게임 선택 메뉴', W / 2, H * .78 + 30); }
+  ctx.globalAlpha = 1;
+}
+const menuBtn = document.getElementById('menuBtn');
+function draw() {
+  menuBtn.style.display = (state !== 'play' || paused) ? 'block' : 'none';
+  ctx.setTransform(DPR, 0, 0, DPR, 0, 0);
+  ctx.save();
+  const sx = (Math.random() * 2 - 1) * shake, sy = (Math.random() * 2 - 1) * shake;
+  ctx.translate(W / 2 + sx, H / 2 + sy); ctx.rotate(-camRoll); ctx.translate(-W / 2, -H / 2);
+  drawSky(); drawTerrain();
+  const list = [];
+  for (const o of objs) list.push({ z: o.d - D, o, k: 'o' });
+  for (const e of enemies) list.push({ z: e.d - D, o: e, k: 'e' });
+  list.sort((a, b) => b.z - a.z);
+  for (const it of list) if (it.z >= PLZ) it.k === 'o' ? drawObj(it.o) : drawEnemy(it.o);
+  drawBullets();
+  drawParts(false);
+  drawPlayer();
+  for (const it of list) if (it.z < PLZ) it.k === 'o' ? drawObj(it.o) : drawEnemy(it.o);
+  drawParts(true);
+  ctx.restore();
+  drawSpeedLines();
+  drawFx2d();
+  if (state === 'play') drawCrosshair();
+  drawTexts();
+  const vg = ctx.createRadialGradient(W / 2, H / 2, Math.min(W, H) * .35, W / 2, H / 2, Math.hypot(W, H) * .6);
+  vg.addColorStop(0, 'rgba(0,0,0,0)'); vg.addColorStop(1, 'rgba(10,0,10,.55)'); ctx.fillStyle = vg; ctx.fillRect(0, 0, W, H);
+  if (hurtFlash > 0) { const hg = ctx.createRadialGradient(W / 2, H / 2, Math.min(W, H) * .25, W / 2, H / 2, Math.hypot(W, H) * .6); hg.addColorStop(0, 'rgba(255,0,30,0)'); hg.addColorStop(1, `rgba(255,0,30,${hurtFlash * .6})`); ctx.fillStyle = hg; ctx.fillRect(0, 0, W, H); }
+  if (flash > 0) { ctx.globalAlpha = Math.min(1, flash) * .8; ctx.fillStyle = flashCol; ctx.fillRect(0, 0, W, H); ctx.globalAlpha = 1; }
+  if (state === 'play' || state === 'over') drawHUD();
+  drawBanner();
+  if (state === 'title') drawTitle();
+  if (state === 'over') drawOver();
+  if (paused) {
+    ctx.fillStyle = 'rgba(0,0,0,.5)'; ctx.fillRect(0, 0, W, H); ctx.textAlign = 'center'; ctx.textBaseline = 'middle';
+    ctx.font = `900 48px ${FONT}`; ctx.fillStyle = '#fff'; ctx.fillText('PAUSED', W / 2, H / 2);
+    ctx.font = `700 15px ${KFONT}`; ctx.fillText('P / ESC / 탭으로 계속  ·  M: 메뉴로', W / 2, H / 2 + 44);
+  }
+}
+
+// ================= 루프 =================
+let last = performance.now();
+function frame(now) {
+  const rdt = Math.min(.05, (now - last) / 1000); last = now;
+  if (hitstop > 0) hitstop -= rdt;
+  else if (!paused) {
+    if (slowmo > 0) slowmo -= rdt;
+    timeScale += ((slowmo > 0 ? .3 : 1) - timeScale) * Math.min(1, rdt * 10);
+    update(rdt * timeScale, rdt);
+  }
+  draw();
+  requestAnimationFrame(frame);
+}
+resize(); addEventListener('resize', resize);
+player = newPlayer(); camX = cxAt(0); updPalette();
+requestAnimationFrame(frame);
+</script>
+</body>
+</html>

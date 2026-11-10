@@ -1,0 +1,247 @@
+<!doctype html>
+<html lang="ko">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width,initial-scale=1">
+<title>Sky Aces</title>
+<link href="https://fonts.googleapis.com/css2?family=Orbitron:wght@600;900&display=swap" rel="stylesheet">
+<style>
+  :root { --bg: #0a1530; --ink: #ffffff; --muted: rgba(255,255,255,.7); }
+  * { box-sizing: border-box; }
+  html, body { margin: 0; min-height: 100%; background: var(--bg); color: var(--ink); font-family: 'Apple SD Gothic Neo', 'Malgun Gothic', sans-serif; overflow-x: hidden; }
+  #sky { position: fixed; inset: 0; width: 100vw; height: 100vh; z-index: 0; }
+  main { position: relative; z-index: 1; min-height: 100vh; display: flex; flex-direction: column; align-items: center; padding: 48px 16px 40px; }
+  h1 { font-family: Orbitron, 'Arial Black', sans-serif; font-weight: 900; font-size: clamp(40px, 8vw, 88px); margin: 0; letter-spacing: .04em; line-height: 1;
+       background: linear-gradient(180deg, #fff6d0, #ffb030 55%, #ff4a2a); -webkit-background-clip: text; background-clip: text; color: transparent;
+       filter: drop-shadow(0 6px 0 rgba(10,10,40,.8)); transform: skewX(-8deg); }
+  h1 span { display: inline-block; animation: drop .7s cubic-bezier(.2,1.6,.4,1) backwards; }
+  @keyframes drop { from { transform: translateY(-120px) rotate(-12deg); opacity: 0; } }
+  .sub { margin: 14px 0 36px; color: #9fe8ff; font-weight: 800; letter-spacing: .2em; font-size: clamp(13px, 2.4vw, 17px); animation: fade 1s .8s backwards; text-align: center; }
+  @keyframes fade { from { opacity: 0; transform: translateY(10px); } }
+  .cards { display: grid; grid-template-columns: repeat(3, minmax(0, 340px)); gap: 26px; perspective: 1200px; width: 100%; justify-content: center; }
+  @media (max-width: 1080px) { .cards { grid-template-columns: minmax(0, 420px); } }
+  .card { position: relative; border-radius: 22px; overflow: hidden; cursor: pointer; text-decoration: none; color: inherit; display: block;
+          background: rgba(8,16,40,.72); border: 1px solid rgba(255,255,255,.14); backdrop-filter: blur(6px);
+          box-shadow: 0 20px 50px rgba(0,0,0,.45); transform-style: preserve-3d; transition: transform .15s ease-out, box-shadow .3s, border-color .3s;
+          animation: flyin .9s cubic-bezier(.2,1.3,.4,1) backwards; }
+  .card:nth-child(1) { animation-delay: .9s; } .card:nth-child(2) { animation-delay: 1.05s; } .card:nth-child(3) { animation-delay: 1.2s; }
+  @keyframes flyin { from { transform: translateY(160px) rotateX(40deg) scale(.7); opacity: 0; } }
+  .card:hover, .card:focus-visible { border-color: var(--accent); box-shadow: 0 24px 70px rgba(0,0,0,.55), 0 0 40px var(--glow); outline: none; }
+  .card canvas { display: block; width: 100%; aspect-ratio: 16 / 10; }
+  .info { padding: 18px 20px 20px; }
+  .tag { font-family: Orbitron, sans-serif; font-size: 11px; font-weight: 900; letter-spacing: .15em; color: var(--accent); }
+  .name { font-family: Orbitron, sans-serif; font-weight: 900; font-size: 26px; margin: 6px 0 8px; transform: skewX(-6deg); }
+  .desc { color: var(--muted); font-size: 14px; line-height: 1.55; min-height: 44px; }
+  .meta { display: flex; justify-content: space-between; align-items: center; margin-top: 14px; }
+  .best { font-family: Orbitron, sans-serif; font-size: 12px; color: var(--muted); }
+  .play { font-family: Orbitron, sans-serif; font-weight: 900; font-size: 13px; padding: 9px 16px; border-radius: 999px; background: var(--accent); color: #10131c; transition: transform .2s; }
+  .card:hover .play { transform: scale(1.08); }
+  .key { position: absolute; top: 12px; right: 12px; font-family: Orbitron, sans-serif; font-weight: 900; font-size: 12px; width: 28px; height: 28px; border-radius: 8px; display: grid; place-items: center; background: rgba(0,0,0,.45); border: 1px solid rgba(255,255,255,.3); }
+  .shine { position: absolute; inset: 0; pointer-events: none; background: radial-gradient(circle at var(--mx,50%) var(--my,0%), rgba(255,255,255,.18), transparent 45%); opacity: 0; transition: opacity .3s; }
+  .card:hover .shine { opacity: 1; }
+  footer { margin-top: 34px; color: rgba(255,255,255,.55); font-size: 13px; text-align: center; animation: fade 1s 1.6s backwards; }
+  #warp { position: fixed; inset: 0; z-index: 5; pointer-events: none; background: #fff; opacity: 0; transition: opacity .45s ease-in; }
+  .launch { transition: transform .5s cubic-bezier(.6,-0.3,.7,1), opacity .5s !important; transform: scale(1.25) translateZ(200px) !important; }
+</style>
+</head>
+<body>
+<canvas id="sky"></canvas>
+<main>
+  <h1 aria-label="SKY ACES"></h1>
+  <div class="sub">3가지 공중전 게임 · 하나를 골라 출격하라</div>
+  <div class="cards">
+    <a class="card" href="sky-striker.html" data-game="striker" data-best="skystriker_best" style="--accent:#ffb02a;--glow:rgba(255,176,42,.35)">
+      <canvas></canvas><div class="key">1</div>
+      <div class="info">
+        <div class="tag">TOP-DOWN SHOOTER</div>
+        <div class="name">SKY STRIKER</div>
+        <div class="desc">탄막을 뚫고 전진하는 종스크롤 슈팅. 배럴 롤로 무적 회피, 폭탄으로 탄막 제거, 3페이즈 거대 전함 보스.</div>
+        <div class="meta"><span class="best">BEST —</span><span class="play">PLAY ▶</span></div>
+      </div><div class="shine"></div>
+    </a>
+    <a class="card" href="dogfight.html" data-game="dogfight" data-best="dogfight_best" style="--accent:#ff7a5a;--glow:rgba(255,122,90,.35)">
+      <canvas></canvas><div class="key">2</div>
+      <div class="info">
+        <div class="tag">360° AIR COMBAT</div>
+        <div class="name">DOGFIGHT ARENA</div>
+        <div class="desc">관성 비행으로 적의 꼬리를 무는 자유 공중전. 록온 미사일, 플레어 회피, 에이스와 폭격기.</div>
+        <div class="meta"><span class="best">BEST —</span><span class="play">PLAY ▶</span></div>
+      </div><div class="shine"></div>
+    </a>
+    <a class="card" href="canyon-rush.html" data-game="canyon" data-best="canyon_best" style="--accent:#ffd06a;--glow:rgba(255,208,106,.35)">
+      <canvas></canvas><div class="key">3</div>
+      <div class="info">
+        <div class="tag">3D CHASE VIEW</div>
+        <div class="name">CANYON RUSH</div>
+        <div class="desc">협곡 속을 초고속으로 질주하는 3D 비행. 링 통과 연쇄, 장애물 회피, 하늘 요새와 결전.</div>
+        <div class="meta"><span class="best">BEST —</span><span class="play">PLAY ▶</span></div>
+      </div><div class="shine"></div>
+    </a>
+  </div>
+  <footer>숫자키 1 · 2 · 3 으로 바로 시작 · 게임 중 일시정지(P) 후 M 키로 이 메뉴로 돌아옵니다</footer>
+</main>
+<div id="warp"></div>
+<script>
+'use strict';
+const TAU = Math.PI * 2, rand = (a, b) => a + Math.random() * (b - a);
+// 제목 글자 애니메이션
+const h1 = document.querySelector('h1');
+[...'SKY ACES'].forEach((ch, i) => { const s = document.createElement('span'); s.textContent = ch === ' ' ? ' ' : ch; s.style.animationDelay = (i * .06) + 's'; h1.appendChild(s); });
+
+// 최고점수
+document.querySelectorAll('.card').forEach(c => {
+  let b = 0; try { b = +localStorage.getItem(c.dataset.best) || 0; } catch (e) { }
+  c.querySelector('.best').textContent = b ? 'BEST ' + b.toLocaleString() : 'BEST —';
+});
+
+// 카드 3D 틸트 & 출격 전환
+const cards = [...document.querySelectorAll('.card')];
+cards.forEach(c => {
+  c.addEventListener('pointermove', e => {
+    const r = c.getBoundingClientRect(), x = (e.clientX - r.left) / r.width, y = (e.clientY - r.top) / r.height;
+    c.style.transform = `rotateY(${(x - .5) * 16}deg) rotateX(${(.5 - y) * 12}deg) translateZ(20px)`;
+    c.style.setProperty('--mx', x * 100 + '%'); c.style.setProperty('--my', y * 100 + '%');
+  });
+  c.addEventListener('pointerleave', () => { c.style.transform = ''; });
+  c.addEventListener('click', e => { e.preventDefault(); launch(c); });
+});
+let launching = false;
+function launch(c) {
+  if (launching) return; launching = true;
+  try {
+    const A = new (window.AudioContext || window.webkitAudioContext)(), o = A.createOscillator(), g = A.createGain();
+    o.type = 'sawtooth'; o.frequency.setValueAtTime(120, A.currentTime); o.frequency.exponentialRampToValueAtTime(900, A.currentTime + .5);
+    g.gain.setValueAtTime(.06, A.currentTime); g.gain.exponentialRampToValueAtTime(.0001, A.currentTime + .55); o.connect(g); g.connect(A.destination); o.start(); o.stop(A.currentTime + .6);
+  } catch (e) { }
+  cards.forEach(k => { if (k !== c) { k.style.transition = 'opacity .3s, transform .3s'; k.style.opacity = '0'; k.style.transform = 'scale(.9)'; } });
+  c.classList.add('launch'); warpSpeed = 1;
+  setTimeout(() => { document.getElementById('warp').style.opacity = '1'; }, 250);
+  setTimeout(() => { location.href = c.getAttribute('href'); }, 720);
+}
+addEventListener('keydown', e => { const n = { Digit1: 0, Digit2: 1, Digit3: 2, Numpad1: 0, Numpad2: 1, Numpad3: 2 }[e.code]; if (n !== undefined) launch(cards[n]); });
+addEventListener('pageshow', e => { if (e.persisted) location.reload(); });
+
+// ============ 배경 하늘 ============
+const sky = document.getElementById('sky'), sc = sky.getContext('2d');
+let SW = 0, SH = 0, warpSpeed = 0;
+function rs() { const d = Math.min(2, devicePixelRatio || 1); SW = innerWidth; SH = innerHeight; sky.width = SW * d; sky.height = SH * d; sc.setTransform(d, 0, 0, d, 0, 0); }
+rs(); addEventListener('resize', rs);
+const clouds = Array.from({ length: 14 }, () => ({ x: rand(0, 1), y: rand(0, 1), r: rand(60, 180), s: rand(.2, 1) }));
+const jets = Array.from({ length: 4 }, (_, i) => ({ x: rand(-.2, 1.2), y: rand(.1, .9), a: rand(-.4, .4) + (i % 2 ? Math.PI : 0), v: rand(.05, .1), trail: [], wob: rand(0, 10) }));
+function drawMiniJet(c, x, y, a, s, col) {
+  c.save(); c.translate(x, y); c.rotate(a + Math.PI / 2); c.scale(s, s); c.fillStyle = col;
+  c.beginPath(); c.moveTo(0, -30); c.lineTo(5, -8); c.lineTo(29, 9); c.lineTo(29, 13); c.lineTo(6, 12); c.lineTo(12, 22); c.lineTo(-12, 22); c.lineTo(-6, 12); c.lineTo(-29, 13); c.lineTo(-29, 9); c.lineTo(-5, -8); c.closePath(); c.fill();
+  c.restore();
+}
+let last = performance.now(), T = 0;
+function skyFrame(now) {
+  const dt = Math.min(.05, (now - last) / 1000); last = now; T += dt;
+  const g = sc.createLinearGradient(0, 0, 0, SH); g.addColorStop(0, '#0a1530'); g.addColorStop(.55, '#1d3f7a'); g.addColorStop(1, '#e0805a');
+  sc.fillStyle = g; sc.fillRect(0, 0, SW, SH);
+  const sg = sc.createRadialGradient(SW * .5, SH * 1.05, 0, SW * .5, SH * 1.05, SH * .9); sg.addColorStop(0, 'rgba(255,200,120,.6)'); sg.addColorStop(1, 'rgba(255,200,120,0)');
+  sc.fillStyle = sg; sc.fillRect(0, 0, SW, SH);
+  for (const c of clouds) {
+    c.x -= dt * .015 * c.s * (1 + warpSpeed * 30); if (c.x < -.3) { c.x = 1.3; c.y = rand(0, 1); }
+    const x = c.x * SW, y = c.y * SH, r = c.r * (1 + warpSpeed);
+    const cg = sc.createRadialGradient(x, y, 0, x, y, r); cg.addColorStop(0, `rgba(255,255,255,${.12 * c.s})`); cg.addColorStop(1, 'rgba(255,255,255,0)');
+    sc.fillStyle = cg; sc.fillRect(x - r, y - r, r * 2, r * 2);
+  }
+  for (const j of jets) {
+    j.a += Math.sin(T * .7 + j.wob) * .15 * dt;
+    j.x += Math.cos(j.a) * j.v * dt * (1 + warpSpeed * 8); j.y += Math.sin(j.a) * j.v * dt * SW / SH * (1 + warpSpeed * 8);
+    j.trail.push([j.x * SW, j.y * SH]); if (j.trail.length > 70) j.trail.shift();
+    if (j.x < -.3 || j.x > 1.3 || j.y < -.3 || j.y > 1.3) { const left = Math.random() < .5; j.x = left ? -.2 : 1.2; j.y = rand(.1, .9); j.a = (left ? 0 : Math.PI) + rand(-.3, .3); j.trail = []; }
+    sc.lineCap = 'round';
+    for (let i = 1; i < j.trail.length; i++) { const f = i / j.trail.length; sc.strokeStyle = `rgba(255,255,255,${f * .3})`; sc.lineWidth = f * 3; sc.beginPath(); sc.moveTo(...j.trail[i - 1]); sc.lineTo(...j.trail[i]); sc.stroke(); }
+    drawMiniJet(sc, j.x * SW, j.y * SH, j.a, .7, 'rgba(10,20,45,.85)');
+  }
+  if (warpSpeed > 0) {
+    warpSpeed = Math.min(3, warpSpeed + dt * 4);
+    sc.strokeStyle = 'rgba(255,255,255,.5)'; sc.lineWidth = 2;
+    for (let i = 0; i < 60; i++) { const a = rand(0, TAU), r0 = rand(50, Math.max(SW, SH) * .5), l = rand(60, 220) * warpSpeed; sc.beginPath(); sc.moveTo(SW / 2 + Math.cos(a) * r0, SH / 2 + Math.sin(a) * r0); sc.lineTo(SW / 2 + Math.cos(a) * (r0 + l), SH / 2 + Math.sin(a) * (r0 + l)); sc.stroke(); }
+  }
+  previews.forEach(p => p(dt));
+  requestAnimationFrame(skyFrame);
+}
+
+// ============ 카드 미리보기 애니메이션 ============
+function setupCanvas(cv) { const d = Math.min(2, devicePixelRatio || 1), r = cv.getBoundingClientRect(); cv.width = Math.max(1, r.width * d); cv.height = Math.max(1, r.height * d); const c = cv.getContext('2d'); c.setTransform(d, 0, 0, d, 0, 0); return { c, w: r.width, h: r.height }; }
+const canvases = cards.map(k => k.querySelector('canvas'));
+let ctxs = canvases.map(setupCanvas);
+addEventListener('resize', () => { ctxs = canvases.map(setupCanvas); });
+function glowDot(c, x, y, r, col) { const g = c.createRadialGradient(x, y, 0, x, y, r); g.addColorStop(0, col); g.addColorStop(1, 'rgba(0,0,0,0)'); c.fillStyle = g; c.fillRect(x - r, y - r, r * 2, r * 2); }
+// 1. Sky Striker
+const ss = { t: 0, bul: [], en: [], boom: [] };
+function prevStriker(dt) {
+  const { c, w, h } = ctxs[0]; ss.t += dt;
+  const g = c.createLinearGradient(0, 0, 0, h); g.addColorStop(0, '#0b4d7a'); g.addColorStop(1, '#1a7fb3'); c.fillStyle = g; c.fillRect(0, 0, w, h);
+  c.fillStyle = 'rgba(255,255,255,.12)'; for (let i = 0; i < 6; i++) { const y = ((ss.t * 60 + i * 60) % (h + 80)) - 40; c.beginPath(); c.ellipse((i * 97) % w, y, 60, 22, 0, 0, TAU); c.fill(); }
+  const px = w / 2 + Math.sin(ss.t * 1.3) * w * .25, py = h * .78;
+  if (Math.random() < dt * 14) ss.bul.push({ x: px - 5, y: py - 16 }, { x: px + 5, y: py - 16 });
+  if (Math.random() < dt * 1.5) ss.en.push({ x: Math.random() * w, y: -20, hp: 4 });
+  c.strokeStyle = '#fff6c0'; c.lineWidth = 2.5; c.lineCap = 'round';
+  for (const b of ss.bul) { b.y -= 500 * dt; c.beginPath(); c.moveTo(b.x, b.y); c.lineTo(b.x, b.y + 8); c.stroke(); }
+  for (const e of ss.en) {
+    e.y += 60 * dt; c.save(); c.translate(e.x, e.y); c.fillStyle = '#c8323f'; c.beginPath(); c.moveTo(0, 12); c.lineTo(11, -6); c.lineTo(0, -2); c.lineTo(-11, -6); c.fill(); c.restore();
+    for (const b of ss.bul) if (Math.abs(b.x - e.x) < 12 && Math.abs(b.y - e.y) < 12) { b.y = -99; e.hp--; }
+    if (e.hp <= 0) { ss.boom.push({ ex: e.x, ey: e.y, t: 0 }); e.y = 999; }
+  }
+  for (const b of ss.boom) { b.t += dt; c.globalCompositeOperation = 'lighter'; glowDot(c, b.ex, b.ey, 30 * (1 + b.t * 2), `rgba(255,160,60,${Math.max(0, .9 - b.t * 1.8)})`); c.globalCompositeOperation = 'source-over'; }
+  ss.bul = ss.bul.filter(b => b.y > -20); ss.en = ss.en.filter(e => e.y < h + 30); ss.boom = ss.boom.filter(b => b.t < .5);
+  c.globalCompositeOperation = 'lighter'; glowDot(c, px, py + 18, 12, 'rgba(80,190,255,.9)'); c.globalCompositeOperation = 'source-over';
+  c.save(); c.translate(px, py); c.scale(Math.cos(Math.cos(ss.t * 1.3) * .7), 1); drawMiniJet(c, 0, 0, -Math.PI / 2, .7, '#3a7bff'); c.restore();
+  c.fillStyle = '#eef3fa'; c.beginPath(); c.ellipse(px, py - 4, 3.5, 14, 0, 0, TAU); c.fill();
+}
+// 2. Dogfight
+const df = { t: 0, jets: [{ a: 0, r: 70, col: '#3a7bff', tr: [] }, { a: -.9, r: 70, col: '#d0303f', tr: [] }] };
+function prevDogfight(dt) {
+  const { c, w, h } = ctxs[1]; df.t += dt;
+  const g = c.createLinearGradient(0, 0, w, h); g.addColorStop(0, '#1b3a66'); g.addColorStop(1, '#c86a5a'); c.fillStyle = g; c.fillRect(0, 0, w, h);
+  df.jets.forEach((j, i) => {
+    const sp = 1.6; j.a += sp * dt; const rx = w * .3 + Math.sin(df.t * .5 + i) * 10, ry = h * .32;
+    const x = w / 2 + Math.cos(j.a) * rx, y = h / 2 + Math.sin(j.a) * ry, hd = Math.atan2(Math.cos(j.a) * ry, -Math.sin(j.a) * rx);
+    j.tr.push([x, y]); if (j.tr.length > 50) j.tr.shift();
+    for (let k = 1; k < j.tr.length; k++) { const f = k / j.tr.length; c.strokeStyle = `rgba(255,255,255,${f * .5})`; c.lineWidth = f * 2.5; c.beginPath(); c.moveTo(...j.tr[k - 1]); c.lineTo(...j.tr[k]); c.stroke(); }
+    drawMiniJet(c, x, y, hd, .65, j.col);
+    if (i === 1 && Math.floor(df.t * 6) % 2) { c.strokeStyle = '#ff4040'; c.lineWidth = 2; c.strokeRect(x - 16, y - 16, 32, 32); }
+    if (i === 0 && Math.random() < dt * 20) { j.shots = j.shots || []; j.shots.push({ x, y, a: hd, t: 0 }); }
+  });
+  const sh = df.jets[0].shots || [];
+  c.strokeStyle = '#ffe08a'; c.lineWidth = 2;
+  for (const s of sh) { s.t += dt; const x = s.x + Math.cos(s.a) * s.t * 400, y = s.y + Math.sin(s.a) * s.t * 400; c.beginPath(); c.moveTo(x, y); c.lineTo(x - Math.cos(s.a) * 8, y - Math.sin(s.a) * 8); c.stroke(); }
+  df.jets[0].shots = sh.filter(s => s.t < .4);
+}
+// 3. Canyon Rush
+const cr = { t: 0, d: 0 };
+function prevCanyon(dt) {
+  const { c, w, h } = ctxs[2]; cr.t += dt; cr.d += dt * 1500;
+  const hz = h * .45, cxs = d => Math.sin(d * .0006) * 300;
+  const sg = c.createLinearGradient(0, 0, 0, hz); sg.addColorStop(0, '#3a1e4a'); sg.addColorStop(1, '#ffb070'); c.fillStyle = sg; c.fillRect(0, 0, w, hz + 2);
+  c.fillStyle = '#f0a878'; c.fillRect(0, hz, w, h - hz);
+  const Fk = w * .9, seg = 150, base = Math.floor(cr.d / seg), camx = cxs(cr.d + 200) * .6;
+  const P = (x, y, z) => [w / 2 + (x - camx) * Fk / z, hz + y * Fk / z];
+  for (let i = 30; i >= 0; i--) {
+    const d1 = Math.max((base + i) * seg, cr.d + 30), d2 = (base + i + 1) * seg + 2, z1 = d1 - cr.d, z2 = d2 - cr.d; if (z2 < 31) continue;
+    const c1 = cxs(d1), c2 = cxs(d2), W1 = 420, Gy = 160, Ty = -900, f = Math.min(1, z2 / 4500), par = (base + i) & 1;
+    const mix = (a, b) => `rgb(${a.map((v, k) => v + (b[k] - v) * f).join(',')})`;
+    const quad = (pts, col) => { c.fillStyle = col; c.strokeStyle = col; c.beginPath(); pts.forEach((p, k) => k ? c.lineTo(...p) : c.moveTo(...p)); c.closePath(); c.fill(); c.stroke(); };
+    quad([P(c1 - W1, Gy, z1), P(c1 + W1, Gy, z1), P(c2 + W1, Gy, z2), P(c2 - W1, Gy, z2)], mix(par ? [201, 138, 82] : [180, 119, 68], [240, 168, 120]));
+    quad([P(c1 - W1, Gy, z1), P(c2 - W1, Gy, z2), P(c2 - W1, Ty, z2), P(c1 - W1, Ty, z1)], mix(par ? [196, 112, 70] : [180, 98, 58], [240, 168, 120]));
+    quad([P(c1 + W1, Gy, z1), P(c2 + W1, Gy, z2), P(c2 + W1, Ty, z2), P(c1 + W1, Ty, z1)], mix(par ? [155, 80, 46] : [140, 70, 40], [240, 168, 120]));
+    if ((base + i) % 6 === 0 && z1 > 60) { const [rx, ry] = P(c1 + Math.sin((base + i) * 1.7) * 200, -40, z1), r = 90 * Fk / z1; c.strokeStyle = 'rgba(255,208,106,.9)'; c.lineWidth = Math.max(1.5, 10 * Fk / z1); c.beginPath(); c.arc(rx, ry, r, 0, TAU); c.stroke(); }
+  }
+  const bank = Math.sin(cr.t * 1.4) * .4, px = w / 2 + Math.sin(cr.t * 1.4 + .5) * w * .12, py = h * .72;
+  c.save(); c.translate(px, py); c.rotate(bank);
+  c.fillStyle = '#3a6ff0'; c.fillRect(-46, 0, 92, 6); c.fillStyle = '#ff7a2a'; c.fillRect(-46, 0, 6, 6); c.fillRect(40, 0, 6, 6);
+  c.fillStyle = '#3a6ff0'; c.beginPath(); c.moveTo(-6, -2); c.lineTo(-12, -22); c.lineTo(-9, -22); c.lineTo(-2, -4); c.moveTo(6, -2); c.lineTo(12, -22); c.lineTo(9, -22); c.lineTo(2, -4); c.fill();
+  c.fillStyle = '#cfd8e6'; c.beginPath(); c.ellipse(0, 3, 12, 9, 0, 0, TAU); c.fill();
+  c.globalCompositeOperation = 'lighter'; glowDot(c, -5, 5, 10, 'rgba(80,190,255,1)'); glowDot(c, 5, 5, 10, 'rgba(80,190,255,1)'); c.globalCompositeOperation = 'source-over';
+  c.restore();
+  c.strokeStyle = 'rgba(255,255,255,.3)'; c.lineWidth = 1;
+  for (let i = 0; i < 8; i++) { const a = rand(0, TAU), r0 = rand(.4, .6) * w; c.beginPath(); c.moveTo(w / 2 + Math.cos(a) * r0, h / 2 + Math.sin(a) * r0); c.lineTo(w / 2 + Math.cos(a) * (r0 + 40), h / 2 + Math.sin(a) * (r0 + 40)); c.stroke(); }
+}
+const previews = [prevStriker, prevDogfight, prevCanyon];
+requestAnimationFrame(skyFrame);
+</script>
+</body>
+</html>
